@@ -327,3 +327,13 @@ create policy "summit fotos subir" on storage.objects for insert to authenticate
   with check (bucket_id = 'summit-fotos' and exists (select 1 from public.tasks t where t.id::text = (storage.foldername(name))[1]));
 create policy "summit fotos borrar" on storage.objects for delete to authenticated
   using (bucket_id = 'summit-fotos' and exists (select 1 from public.tasks t where t.id::text = (storage.foldername(name))[1]));
+
+-- ---------- Confirmación automática de cuentas ----------
+-- El correo gratuito de Supabase apenas envía mensajes, así que las cuentas quedan confirmadas al crearse.
+create or replace function private.auto_confirm_email() returns trigger language plpgsql security definer set search_path = '' as $$
+begin
+  if new.email_confirmed_at is null then new.email_confirmed_at := now(); end if;
+  return new;
+end $$;
+drop trigger if exists summit_auto_confirm on auth.users;
+create trigger summit_auto_confirm before insert on auth.users for each row execute function private.auto_confirm_email();

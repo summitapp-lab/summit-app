@@ -2,7 +2,7 @@
 
 Gestor de tareas personal basado en GTD (Getting Things Done). Es una PWA: se abre en el navegador, se instala en la pantalla de inicio del iPhone y funciona sin conexión.
 
-**Versión:** 1.3.0 · **Datos:** Supabase (proyecto «Summit» de la organización summitapp-lab) · **Web:** GitHub Pages
+**Versión:** 1.3.1 · **Datos:** Supabase (proyecto «Summit» de la organización summitapp-lab) · **Web:** GitHub Pages
 
 ## Funciones
 

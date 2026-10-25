@@ -2,7 +2,7 @@
    PWA sin dependencias de compilación. Datos en Supabase (esquema `summit`), con caché local
    y cola de cambios para funcionar sin conexión. */
 'use strict';
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.3.1';
 const CFG = window.SUMMIT_CONFIG || {};
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -308,8 +308,13 @@ function showAuth(mode = 'login', msg = '') {
         if (val('a-pass').length < 8) throw new Error('La contraseña debe tener al menos 8 caracteres.');
         const { data, error } = await sb.auth.signUp({ email: val('a-email').trim(), password: val('a-pass'), options: { data: { name: val('a-name').trim() } } });
         if (error) throw error;
-        if (!data.session) { m.style.color = 'var(--sage)'; m.textContent = 'Revisa tu correo para confirmar la cuenta y después entra.'; return; }
-        a.hidden = true; await enter(data.user);
+        let user = data.session && data.user;
+        if (!user) { // la cuenta queda confirmada en la base de datos: entrar directamente
+          const s = await sb.auth.signInWithPassword({ email: val('a-email').trim(), password: val('a-pass') });
+          if (s.error) { m.style.color = 'var(--sage)'; m.textContent = 'Cuenta creada. Ya puedes entrar con tu correo y contraseña.'; showAuth('login', 'Cuenta creada. Entra con tu correo y contraseña.'); return; }
+          user = s.data.user;
+        }
+        a.hidden = true; await enter(user);
       } else if (mode === 'forgot') {
         const email = val('a-email').trim(); if (!email) throw new Error('Escribe tu correo.');
         const { error } = await sb.auth.resetPasswordForEmail(email); if (error) throw error;
