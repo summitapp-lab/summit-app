@@ -4,10 +4,9 @@
 // Nombre de la función: summit-mcp · Pega este archivo entero · Deploy
 // Después, en los ajustes de la función, desactiva «Verify JWT».
 // No hay nada que editar: la URL y la clave del proyecto las pone Supabase.
-// (Copia de seguridad de la versión 1.0.0 desplegada en el proyecto.)
 // ============================================================
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, content-type, accept, mcp-session-id, mcp-protocol-version, x-summit-key, apikey",
@@ -147,7 +146,7 @@ async function handleMessage(msg: any, key: string) {
     case "tools/call": {
       const name = params?.name;
       if (!TOOLS.some((t) => t.name === name)) return rpcErr(id, -32602, `Herramienta desconocida: ${name}`);
-      if (!key) return { jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: "Falta la clave de Summit. Añade ?key=TU-CLAVE al final de la URL del conector (Summit → Ajustes → Conector de Claude)." }] } };
+      if (!key) return { jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: "Falta la clave de Summit. Añade ?key=TU-CLAVE al final de la URL del conector (Summit → Ajustes → Claude)." }] } };
       try {
         const data = await callSummit(key, name, params?.arguments ?? {});
         return { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(data, null, 1) }], structuredContent: data && typeof data === "object" && !Array.isArray(data) ? data : { resultado: data } } };

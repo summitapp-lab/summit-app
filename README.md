@@ -2,7 +2,7 @@
 
 Gestor de tareas personal basado en GTD (Getting Things Done). Es una PWA: se abre en el navegador, se instala en la pantalla de inicio del iPhone y funciona sin conexión.
 
-**Versión:** 1.3.0 · **Datos:** Supabase (esquema `summit` del proyecto DailyHabits) · **Web:** GitHub Pages
+**Versión:** 1.3.0 · **Datos:** Supabase (proyecto «Summit» de la organización summitapp-lab) · **Web:** GitHub Pages
 
 ## Funciones
 
@@ -24,8 +24,11 @@ Gestor de tareas personal basado en GTD (Getting Things Done). Es una PWA: se ab
 | `config.js` | URL y clave publicable de Supabase (pública por diseño; la seguridad la ponen las reglas RLS) |
 | `sw.js`, `manifest.webmanifest` | Funcionamiento sin conexión e instalación |
 | `supabase.min.js`, `*.woff2`, `*.png`, `logo.svg` | Cliente de Supabase, tipografías e iconos, todos en la raíz |
-| `supabase/fotos.sql` | Migración de fotos (ya aplicada) |
-| `supabase/functions/summit-mcp/index.ts` | Copia del conector de Claude desplegado como Edge Function |
+| `supabase/schema.sql` | Esquema completo: tablas, seguridad RLS, funciones de la app, atajos, tiempo real y fotos (ya aplicado) |
+| `supabase/claude.sql` | Lógica del conector de Claude (ya aplicada) |
+| `supabase/functions/summit-mcp/index.ts` | Conector de Claude, desplegado como Edge Function con «Verify JWT» desactivado |
+
+Para montar Summit en otro proyecto de Supabase: aplica `schema.sql` y después `claude.sql` en el SQL Editor, despliega la función `summit-mcp` y cambia la URL y la clave publicable en `config.js`.
 
 ## Publicación
 

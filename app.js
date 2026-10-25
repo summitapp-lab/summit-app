@@ -176,7 +176,7 @@ async function start() {
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => null);
   if (!window.supabase) return fatal('No se ha podido cargar <b>supabase.min.js</b>. Comprueba que está en la raíz del repositorio, junto a index.html.');
   if (!CFG.SUPABASE_URL || !CFG.SUPABASE_KEY) return fatal('Falta configurar <b>config.js</b> con la URL y la clave publicable de Supabase.');
-  sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_KEY, { db: { schema: 'summit' }, auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: 'summit-auth' } });
+  sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: 'summit-auth' } });
   sb.auth.onAuthStateChange((ev, session) => {
     if (ev === 'PASSWORD_RECOVERY') showAuth('reset');
     if (ev === 'SIGNED_OUT') { ME = null; showAuth('login'); }
@@ -206,7 +206,7 @@ async function enter(user) {
   try { await loadAll(); LS.set('summit-last-user', { id: ME, email: MEMAIL, name: S.profile && S.profile.name }); if (!cached) showApp(); else render(); subscribe(); flush(); }
   catch (e) {
     console.warn(e);
-    if (isSchemaErr(e)) return fatal('Falta un paso en Supabase: en <b>Project Settings → Data API → Exposed schemas</b>, añade <b>summit</b> y guarda.');
+    if (isSchemaErr(e)) return fatal('La base de datos de Summit no está preparada. Aplica <b>supabase/schema.sql</b> en el proyecto de Supabase.');
     if (!cached) { if (isNetErr(e)) return fatal('No hay conexión y este dispositivo aún no tiene una copia de tus datos. Conéctate una vez para descargarlos.'); return fatal('No se han podido cargar tus datos: ' + esc(e.message || e)); }
     setOffline(true);
   }
@@ -238,7 +238,7 @@ function scheduleReload(ms = 800) { clearTimeout(reloadTimer); reloadTimer = set
 function subscribe() {
   if (channel || !sb.channel) return;
   channel = sb.channel('summit-' + ME);
-  for (const table of ['tasks', 'projects', 'project_members']) channel.on('postgres_changes', { event: '*', schema: 'summit', table }, () => scheduleReload(1200));
+  for (const table of ['tasks', 'projects', 'project_members']) channel.on('postgres_changes', { event: '*', schema: 'public', table }, () => scheduleReload(1200));
   channel.subscribe();
 }
 // Tareas capturadas con el atajo de iPhone: se interpretan al abrir la app
