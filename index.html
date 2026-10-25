@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Summit</title>
+<meta name="theme-color" content="#F4F2EC" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#151816" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Summit">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="styles.css?v=1.3.0">
+</head>
+<body>
+<div id="splash"><svg viewBox="0 0 64 64" class="splash-logo"><path d="M10 45 L24 26 L31 35 L40 19 L54 45" pathLength="1"/><circle cx="40" cy="19" r="2.6"/></svg></div>
+
+<main id="auth" hidden></main>
+
+<div id="app" hidden>
+  <header class="topbar">
+    <button class="icon-btn" id="btn-menu" aria-label="Menú"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg></button>
+    <span class="grow"></span>
+    <span id="offline-pill" hidden>sin conexión</span>
+    <button class="icon-btn" id="btn-stats" aria-label="Estadísticas"><svg viewBox="0 0 24 24"><path d="M4 20h16M7 17V10M12 17V5M17 17v-4"/></svg></button>
+    <button class="icon-btn" id="btn-search" aria-label="Buscar"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg></button>
+    <button class="icon-btn" id="btn-bell" aria-label="Avisos"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></svg><i class="dot" id="bell-dot" hidden></i></button>
+  </header>
+  <section id="view" tabindex="-1"></section>
+  <button id="fab" aria-label="Nueva tarea"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+  <nav id="tabbar">
+    <button data-view="inbox"><svg viewBox="0 0 24 24"><path d="M4 13l2.5-7h11L20 13v5H4z"/><path d="M4 13h4.5l1 2h5l1-2H20"/></svg><span>Bandeja</span><b class="badge" id="badge-inbox" hidden></b></button>
+    <button data-view="projects"><svg viewBox="0 0 24 24"><path d="M3.5 7.5A1.5 1.5 0 0 1 5 6h4l2 2h8a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z"/></svg><span>Proyectos</span></button>
+    <button data-view="focus"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".6"/></svg><span>Enfoque</span></button>
+  </nav>
+</div>
+
+<div id="drawer-scrim" hidden></div>
+<aside id="drawer" hidden></aside>
+<div id="sheet-scrim" hidden></div>
+<section id="sheet" hidden></section>
+<div id="pop" hidden></div>
+<div id="overlay" hidden></div>
+<div id="toast" hidden></div>
+
+<script src="supabase.min.js"></script>
+<script src="config.js?v=1.3.0"></script>
+<script src="app.js?v=1.3.0"></script>
+</body>
+</html>
