@@ -2,7 +2,7 @@
 
 Gestor de tareas personal basado en GTD (Getting Things Done). Es una PWA: se abre en el navegador, se instala en la pantalla de inicio del iPhone y funciona sin conexión.
 
-**Versión:** 1.4.0 · **Datos:** Supabase (proyecto «Summit» de la organización summitapp-lab) · **Web:** GitHub Pages
+**Versión:** 1.4.1 · **Datos:** Supabase (proyecto «Summit» de la organización summitapp-lab) · **Web:** GitHub Pages
 
 ## Funciones
 
@@ -12,6 +12,7 @@ Gestor de tareas personal basado en GTD (Getting Things Done). Es una PWA: se ab
 - Añadir rápido con la sintaxis de Todoist: `#proyecto`, `/sección`, `@contexto` o `%contexto`, `+persona`, `p1`–`p4`, `{fecha límite}`, fechas en lenguaje natural («mañana 10:00», «el viernes», «3/11», «en 5 días») y sugerencias mientras se escribe
 - Atajos de teclado de Todoist sobre la tarea creada o seleccionada (`T`, `Shift+T`, `V`, `Y`, `1`–`4`, `L`, `Shift+R`, `E`, `Enter`) y de navegación (`Q`, `M`, `J/K`, `/`, `G` → `I/T/U/P`); `?` muestra la lista completa
 - Menú lateral que se puede fijar en PC (botón del menú o tecla `M`)
+- Tutorial en Ajustes: 22 capítulos en 5 partes, con progreso de lectura sincronizado y acceso directo a cada sección
 - Fotos en las tareas (comprimidas en el dispositivo, guardadas en Supabase Storage)
 - Enfoque (Pomodoro 25/5, 50/10, 90/15), Matriz Eisenhower, Revisión semanal y filtros guardados
 - Estadísticas generales y por proyecto (racha, cumplimiento de fechas límite, lead time, burn-up)

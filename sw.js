@@ -1,7 +1,7 @@
 // Summit · service worker: la app abre sin conexión. Los datos van siempre a Supabase.
-const VERSION = 'summit-1.4.0';
+const VERSION = 'summit-1.4.1';
 const SHELL = [
-  './', 'index.html', 'styles.css?v=1.4.0', 'app.js?v=1.4.0', 'config.js?v=1.4.0', 'supabase.min.js', 'manifest.webmanifest',
+  './', 'index.html', 'styles.css?v=1.4.1', 'app.js?v=1.4.1', 'config.js?v=1.4.1', 'supabase.min.js', 'manifest.webmanifest',
   'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png', 'favicon-32.png', 'logo.svg',
   'figtree-latin-400-normal.woff2', 'figtree-latin-500-normal.woff2', 'figtree-latin-600-normal.woff2', 'figtree-latin-700-normal.woff2',
   'bricolage-grotesque-latin-600-normal.woff2', 'bricolage-grotesque-latin-700-normal.woff2',

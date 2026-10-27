@@ -2,14 +2,14 @@
    PWA sin dependencias de compilación. Datos en Supabase (esquema `summit`), con caché local
    y cola de cambios para funcionar sin conexión. */
 'use strict';
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.4.1';
 const CFG = window.SUMMIT_CONFIG || {};
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); }));
 const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, '');
-const LOGO = '<svg class="logo" viewBox="0 0 64 64"><defs><linearGradient id="lg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6C8E77"/><stop offset="1" stop-color="#4A6A55"/></linearGradient></defs><rect width="64" height="64" rx="15" fill="url(#lg)"/><path d="M19 30 L31 48 H7 Z" fill="#fff" fill-opacity=".35"/><path d="M35 14 L55 48 H15 Z" fill="#fff"/><path d="M35 14 L55 48 H37.5 L33 32 Z" fill="#D9E5DC"/><path d="M35 14 L40.6 23.5 L36.6 22 L33.9 24.6 L31.6 22.4 L29.4 23.6 Z" fill="#4A6A55" fill-opacity=".85"/></svg>';
+const LOGO = '<svg class="logo" viewBox="0 0 64 64"><rect width="64" height="64" rx="15" fill="#F4F2EC"/><path d="M12 44 L24.5 28 L31 36 L40 23 L52 44" fill="none" stroke="#5F7F6A" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" pathLength="1"/></svg>';
 const I = {
   cal: '<svg class="ic" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>',
   flag: '<svg class="ic" viewBox="0 0 24 24"><path d="M6 21V4M6 4h11l-2 4 2 4H6"/></svg>',
@@ -1483,11 +1483,15 @@ function statsProject() {
 /* ---------- Ajustes ---------- */
 function settingsView() {
   const s = settings(), page = VIEW.page;
+  if (page === 'tutorial') return tutorialView();
   const back = `<button class="btn ghost small" ${goAttr({ name: 'settings' })} style="margin:10px 0 0 -8px">‹ Ajustes</button>`;
   const themeL = { system: 'Sistema', light: 'Claro', dark: 'Oscuro' };
   if (!page) {
     const r = (pg, icon, label, val = '') => `<button class="r" ${goAttr({ name: 'settings', page: pg })}>${icon}<span class="grow">${label}</span><span class="val">${esc(val)}</span><span class="chev">›</span></button>`;
-    return head('Ajustes') + `<div class="rows">
+    const tr = tutRead().filter((id) => TUT_ALL.some((c) => c.id === id)).length;
+    return head('Ajustes') + `<div class="rows" style="margin-bottom:10px">
+      ${r('tutorial', I.book, 'Tutorial', tr ? `${tr}/${TUT_ALL.length} leídos` : `${TUT_ALL.length} capítulos`)}
+    </div><div class="rows">
       ${r('cuenta', I.user.replace('class="ic"', ''), 'Cuenta', s && S.profile.name)}
       ${r('apariencia', SUN, 'Apariencia', themeL[s.theme || 'system'])}
       ${r('avisos', '<svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/></svg>', 'Avisos', `${s.leadDays ?? 2} días antes`)}
@@ -1730,6 +1734,137 @@ function bindViewport() {
   const f = () => { document.documentElement.style.setProperty('--vvh', vv.height + 'px'); document.documentElement.style.setProperty('--vvtop', vv.offsetTop + 'px'); };
   vv.addEventListener('resize', f); vv.addEventListener('scroll', f); f();
 }
+
+
+/* ---------- Tutorial (Ajustes → Tutorial) ----------
+   Capítulos agrupados por partes. Cada uno: introducción, pasos, consejos, atajos y botón para ir a la sección.
+   Los capítulos leídos se guardan en los ajustes del perfil (se sincronizan entre dispositivos). */
+const TUTORIAL = [
+  { part: 'Empezar', chapters: [
+    { id: 'gtd', title: 'Qué es Summit y el método GTD', icon: I.mount, min: 2, go: { name: 'today' },
+      intro: 'Summit sigue el método GTD (Getting Things Done) de David Allen: sacar todo de la cabeza y confiar en un sistema que te dice qué hacer en cada momento. Tiene cinco pasos, y cada uno vive en un sitio de la app.',
+      steps: ['<b>Capturar</b>: todo lo que te ronda va a la Bandeja con el botón +.', '<b>Aclarar</b>: procesas la Bandeja y decides qué es cada cosa.', '<b>Organizar</b>: cada tarea acaba en un proyecto, con fecha o con un contexto.', '<b>Revisar</b>: una vez por semana repasas el sistema con la Revisión semanal.', '<b>Hacer</b>: trabajas desde Hoy, Próximas acciones o Enfoque.'],
+      tips: ['El menú inferior tiene lo esencial: Bandeja, Proyectos y Enfoque. El resto está en el menú lateral (☰).', 'Las estadísticas, la búsqueda y los avisos están siempre arriba a la derecha.'] },
+    { id: 'instalar', title: 'Instalar en el iPhone y usar sin conexión', icon: '<svg viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>', min: 2,
+      intro: 'Summit es una app web: se instala desde Safari y funciona aunque no tengas cobertura.',
+      steps: ['Abre la dirección de Summit en <b>Safari</b>.', 'Pulsa <b>Compartir</b> (el cuadrado con la flecha) → <b>Añadir a pantalla de inicio</b>.', 'Entra con tu correo y contraseña. Tus datos aparecen en cualquier dispositivo.', 'Sin conexión verás la etiqueta <b>«sin conexión»</b> arriba. Puedes seguir trabajando: los cambios se guardan en el teléfono y se suben solos cuando vuelve la red.'],
+      tips: ['No cierres sesión con cambios pendientes: Summit te avisará si los hay.', 'En Ajustes → Datos ves cuántos cambios faltan por subir y puedes sincronizar a mano.'] },
+  ] },
+  { part: 'Capturar y organizar', chapters: [
+    { id: 'capturar', title: 'Capturar tareas', icon: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>', min: 3, go: { name: 'inbox' },
+      intro: 'Capturar debe ser instantáneo. Pulsa el botón + (o la tecla Q en el ordenador), escribe y pulsa Enter. Puedes añadir los detalles escribiendo símbolos, igual que en Todoist.',
+      steps: ['Escribe la tarea empezando por un verbo: «Llamar a KHS por los repuestos».', 'Añade, si quieres, <b>#proyecto</b>, <b>/sección</b>, <b>@contexto</b>, <b>p1</b>–<b>p4</b> (prioridad) o <b>+persona</b>. Al escribir el símbolo aparecen sugerencias.', 'Escribe la fecha con palabras: «mañana 10:00», «el viernes», «3/11», «en 5 días». La fecha límite va entre llaves: <b>{viernes}</b>.', 'También puedes pulsar <b>··· Más</b> y usar los botones de Proyecto, Fecha, Límite, Prioridad y Contexto.', 'El icono de la cámara añade fotos a la tarea.'],
+      tips: ['Si no pones proyecto ni fecha, la tarea va a la Bandeja para procesarla después.', 'El botón + recuerda dónde estás: dentro de un proyecto, la tarea se crea en ese proyecto; en Hoy, con fecha de hoy.'],
+      keys: [['Q', 'Nueva tarea'], ['Enter', 'Guardar'], ['↑ ↓ · Tab', 'Elegir sugerencia']] },
+    { id: 'bandeja', title: 'La Bandeja de entrada', icon: I.inbox, min: 1, go: { name: 'inbox' },
+      intro: 'La Bandeja es el sitio donde cae todo lo que capturas sin aclarar. No es una lista de tareas: es una sala de espera que conviene vaciar a menudo.',
+      steps: ['El número sobre el icono de la Bandeja indica cuántas cosas esperan.', 'Pulsa <b>Procesar</b> para decidir qué es cada una (siguiente capítulo).', 'También puedes abrir cualquier elemento y editarlo a mano.'],
+      tips: ['Lo ideal es vaciarla una vez al día. Una bandeja llena hace perder la confianza en el sistema.', 'Lo que capturas con el atajo de iPhone o con Claude también llega aquí.'] },
+    { id: 'procesar', title: 'Procesar la bandeja', icon: '<svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg>', min: 2, go: { name: 'inbox' },
+      intro: 'Procesar es decidir, elemento a elemento, qué significa cada cosa. Summit lo hace en una sola pantalla por elemento.',
+      steps: ['En Bandeja, pulsa <b>Procesar</b>.', 'Corrige el título si hace falta y, si pertenece a un proyecto, tócalo en la fila de proyectos.', 'Elige una acción: <b>Hoy</b> (lo harás hoy) o <b>Próxima acción</b> (lo harás en cuanto puedas).', 'O una de las secundarias: <b>2 minutos</b> (si tardas menos, hazlo ya y márcalo como hecho), <b>Delegar</b> (queda En espera de alguien), <b>Algún día</b> o <b>Eliminar</b>.', 'Summit pasa al siguiente elemento solo, hasta dejar la bandeja vacía.'],
+      tips: ['La regla de los 2 minutos se puede desactivar en Ajustes → Planificación.'] },
+    { id: 'proyectos', title: 'Proyectos y secciones', icon: '<svg viewBox="0 0 24 24"><path d="M3.5 7.5A1.5 1.5 0 0 1 5 6h4l2 2h8a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z"/></svg>', min: 3, go: { name: 'projects' },
+      intro: 'Un proyecto es cualquier resultado que necesita más de un paso: «Comisionar la línea de toneles», «Organizar el viaje a México».',
+      steps: ['En Proyectos, pulsa <b>+ Nuevo</b>. Ponle nombre y el <b>resultado deseado</b>: cómo sabrás que está terminado.', 'Elige área, color y cada cuántos días quieres revisarlo.', 'Añade <b>secciones</b> para agrupar las tareas (por ejemplo «Ingeniería», «Compras», «Puesta en marcha»).', 'Dentro del proyecto, cambia entre vista de <b>lista</b> y de <b>tablero</b> con los botones de arriba.', 'El círculo muestra el porcentaje completado. El menú ⋯ permite editar, pausar, completar o eliminar el proyecto.'],
+      tips: ['Cada proyecto activo debería tener siempre al menos una próxima acción. La Revisión semanal te avisa de los que no la tienen.', 'Los proyectos en pausa se ven en Algún día / Quizás.'] },
+    { id: 'compartir', title: 'Proyectos compartidos', icon: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/></svg>', min: 2, go: { name: 'projects' },
+      intro: 'Puedes compartir un proyecto con otra persona que tenga su propia cuenta de Summit. Cada uno ve el proyecto en su app y añade sus tareas.',
+      steps: ['Abre el proyecto y pulsa el icono de personas → <b>Generar código</b> (empieza por SUM-).', 'Envía el código. La otra persona va a Proyectos → <b>Unirme</b> y lo escribe.', 'En las tareas del proyecto aparece el campo <b>Asignada a</b>; al escribir puedes usar <b>+nombre</b>.', 'Desde la misma pantalla puedes quitar miembros, generar un código nuevo o dejar de compartir.'],
+      tips: ['Solo ves las tareas de los proyectos compartidos; el resto de tu Summit sigue siendo privado.', 'En Hoy y Próximas acciones solo aparecen las tareas compartidas que te han asignado a ti.'] },
+    { id: 'detalle', title: 'El detalle de una tarea', icon: I.note.replace('class="ic"', ''), min: 3,
+      intro: 'Al tocar una tarea se abre su ficha. Todo se guarda solo al cambiarlo.',
+      steps: ['<b>Fecha</b>: el día que piensas hacerla. <b>Límite</b>: el compromiso real; Summit te avisa unos días antes. <b>Disponible</b> (en Más opciones): la oculta hasta ese día.', '<b>Prioridad</b> de P1 (máxima) a sin prioridad, y <b>contextos</b> (dónde o con qué se puede hacer).', '<b>Estado</b>: próxima acción, en espera, algún día, referencia o hecha.', 'En <b>Más opciones</b>: repetición, aviso, duración estimada y energía necesaria.', 'Añade <b>subtareas</b> y <b>fotos</b> al final. Para cerrar, arrastra la ficha hacia abajo o pulsa ✕.'],
+      tips: ['Al completar una tarea que se repite, Summit crea la siguiente automáticamente.', 'El menú ⋯ permite duplicarla, devolverla a la Bandeja o eliminarla.'],
+      keys: [['T', 'Fecha'], ['V', 'Proyecto'], ['Y', 'Prioridad'], ['L', 'Contextos'], ['E', 'Completar']] },
+    { id: 'contextos', title: 'Contextos, áreas y filtros', icon: I.at.replace('class="ic"', ''), min: 2, go: { name: 'next' },
+      intro: 'Los contextos dicen dónde o con qué puedes hacer una tarea (@Oficina, @Teléfono, @Ordenador). Las áreas agrupan proyectos (Trabajo, Personal). Los filtros guardan búsquedas que usas a menudo.',
+      steps: ['Crea o borra contextos y áreas en Ajustes → <b>Áreas y contextos</b>.', 'Asigna contextos con <b>@</b> al escribir o desde la ficha de la tarea.', 'Cada contexto tiene su lista en el menú lateral → Más → Contextos.', 'Para crear un filtro: menú lateral → Más → Filtros → <b>+</b>. Combina contextos, prioridad, proyecto y fechas.'] },
+  ] },
+  { part: 'Hacer', chapters: [
+    { id: 'hoy', title: 'Hoy', icon: SUN, min: 1, go: { name: 'today' },
+      intro: 'Hoy reúne lo que vence hoy y lo que ya está vencido. Es la pantalla de trabajo diario.',
+      steps: ['Arriba, en rojo, las <b>vencidas</b>; después, las de hoy.', 'Toca el círculo para completar. Aparece «Deshacer» unos segundos por si te equivocas.', 'Al final verás cuántas has completado hoy; tócalo para ir al Registro.'],
+      tips: ['El color del círculo indica la prioridad: rojo P1, ámbar P2, azul P3.'] },
+    { id: 'calendario', title: 'Próximos y Calendario', icon: I.soon, min: 1, go: { name: 'calendar' },
+      intro: 'Próximos lista por días todo lo que tiene fecha o límite en el futuro. El Calendario lo muestra en un mes.',
+      steps: ['En el Calendario, las rayas verdes son fechas y las rojas, fechas límite.', 'Toca un día para ver sus tareas y añadir una con esa fecha.', 'Usa las flechas para cambiar de mes y <b>Hoy</b> para volver.'] },
+    { id: 'proximas', title: 'Próximas acciones', icon: I.focus, min: 2, go: { name: 'next' },
+      intro: 'Todas las tareas que puedes hacer ya, agrupadas por contexto. Es la lista para cuando tienes un rato y quieres elegir qué hacer.',
+      steps: ['Mira el contexto en el que estás (por ejemplo @Teléfono) y elige de esa lista.', 'Pulsa <b>Filtrar</b> para ver solo tareas de poca energía o de 15–30 minutos.'],
+      tips: ['No aparecen las tareas de la Bandeja, las que están en espera ni las que tienen «Disponible» en el futuro.'] },
+    { id: 'espera', title: 'En espera y Algún día', icon: I.hourglass, min: 1, go: { name: 'waiting' },
+      intro: 'En espera guarda lo que depende de otra persona. Algún día / Quizás, las ideas que no vas a hacer ahora pero no quieres olvidar.',
+      steps: ['Al delegar, indica de quién esperas respuesta. Summit muestra los días que llevas esperando.', 'Repasa ambas listas en la Revisión semanal y reactiva lo que toque cambiando el estado a «Próxima acción».'] },
+    { id: 'enfoque', title: 'Enfoque (Pomodoro)', icon: '<svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/></svg>', min: 1, go: { name: 'focus' },
+      intro: 'Un temporizador para trabajar concentrado en bloques: 25/5, 50/10 o 90/15 minutos de trabajo y descanso.',
+      steps: ['Elige el modo y, si quieres, la tarea en la que vas a trabajar.', 'Pulsa <b>Empezar</b>. Al terminar, Summit registra la sesión y suma los minutos a la tarea.', 'Abajo ves los minutos de hoy y de los últimos 7 días.'] },
+    { id: 'matriz', title: 'Matriz Eisenhower', icon: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>', min: 1, go: { name: 'matrix' },
+      intro: 'Reparte tus próximas acciones en cuatro cuadrantes según urgencia e importancia.',
+      steps: ['Importante = prioridad P1 o P2. Urgente = fecha o límite en los próximos 2 días.', '<b>Hacer ya</b>, <b>Planificar</b>, <b>Delegar</b> y <b>Más tarde</b>. Toca cualquier tarea para cambiarla.'] },
+  ] },
+  { part: 'Revisar y mejorar', chapters: [
+    { id: 'revision', title: 'Revisión semanal', icon: I.review, min: 2, go: { name: 'review' },
+      intro: 'El hábito que mantiene el sistema fiable. Dedícale 20–30 minutos una vez por semana.',
+      steps: ['Sigue la lista: obtener claridad, ponerse al día y ser creativo. Marca cada paso al hacerlo.', 'Debajo, Summit te enseña los proyectos sin próxima acción y los que toca revisar.', 'Al terminar, pulsa <b>Marcar revisión como completada</b>.'],
+      tips: ['Elige el día de tu revisión en Ajustes → Planificación. Ese día aparecerá un aviso en la campana.'] },
+    { id: 'estadisticas', title: 'Registro y estadísticas', icon: '<svg viewBox="0 0 24 24"><path d="M4 20h16M7 17V10M12 17V5M17 17v-4"/></svg>', min: 2, go: { name: 'stats' },
+      intro: 'El Registro guarda lo que has completado, día a día. Las estadísticas te dicen cómo vas.',
+      steps: ['Abre las estadísticas con el icono de gráfico de arriba.', '<b>General</b>: completadas, racha, fechas límite cumplidas, tiempo de enfoque y tareas por día (7, 30 o 90 días).', '<b>Por proyecto</b>: avance, lead time y gráfico burn-up (alcance frente a completado).', 'Pulsa <b>Ver análisis completo</b> para el reparto por proyecto, día de la semana y franja horaria.'] },
+    { id: 'buscar', title: 'Buscar y avisos', icon: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>', min: 1,
+      intro: 'La lupa busca en tareas, proyectos y vistas. La campana reúne los avisos del día.',
+      steps: ['Escribe parte del título o de las notas; también encuentra tareas completadas.', 'La campana avisa de tareas vencidas, fechas límite cercanas y del día de revisión. El punto rojo indica que hay algo.', 'Configura cuántos días antes avisar en Ajustes → Avisos.'],
+      keys: [['/', 'Buscar'], ['Ctrl/⌘ + K', 'Buscar']] },
+  ] },
+  { part: 'Conectar y personalizar', chapters: [
+    { id: 'teclado', title: 'Atajos de teclado y menú fijo', icon: '<svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg>', min: 2,
+      intro: 'En el ordenador o en el iPad con teclado, Summit usa los mismos atajos que Todoist. Pulsa ? para ver la lista completa.',
+      steps: ['<b>Q</b> crea una tarea. Al guardarla queda seleccionada: pulsa <b>T</b>, <b>V</b>, <b>Y</b> o <b>L</b> para darle fecha, proyecto, prioridad o contextos.', 'Muévete entre tareas con <b>J</b> y <b>K</b> (o las flechas) y ábrelas con <b>Enter</b>.', 'Navega con <b>G</b> seguido de una letra: G→I Bandeja, G→T Hoy, G→U Próximos, G→P Proyectos.', 'En pantallas grandes, fija el menú lateral con el botón junto al logotipo o con la tecla <b>M</b>.'],
+      keys: [['?', 'Ver todos los atajos'], ['M', 'Fijar el menú'], ['Shift + T', 'Quitar la fecha']] },
+    { id: 'iphone', title: 'Atajos de iPhone', icon: '<svg viewBox="0 0 24 24"><path d="M13 3L5 14h6l-1 7 8-11h-6z"/></svg>', min: 3, go: { name: 'settings', page: 'atajos' },
+      intro: 'Con la app Atajos del iPhone puedes capturar tareas con Siri o con el Botón de Acción, y recibir cada mañana un resumen de tu día.',
+      steps: ['Ve a Ajustes → <b>Atajos de iPhone</b> y pulsa <b>Generar código</b> (empieza por SMT-). Cópialo: solo se muestra una vez.', 'En la app Atajos crea un atajo con la acción <b>Obtener contenido de URL</b>, con la dirección, los encabezados y el cuerpo que indica esa pantalla.', 'Para capturar, usa «Dictar texto» y envíalo como <b>p_texto</b>. La tarea llega a tu Bandeja.', 'Para el resumen, crea una automatización diaria que llame a la segunda dirección y muestre el resultado como notificación.'],
+      tips: ['Lo que dictes puede incluir #proyecto, @contexto o «mañana»: Summit lo interpreta al abrir la app.', 'Si pierdes el teléfono, pulsa Revocar y el código deja de funcionar.'] },
+    { id: 'claude', title: 'Conector de Claude', icon: '<svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/></svg>', min: 2, go: { name: 'settings', page: 'claude' },
+      intro: 'Conecta Summit con Claude para preguntarle por tus tareas o pedirle que las cree y organice por ti.',
+      steps: ['Ve a Ajustes → <b>Claude</b> y pulsa <b>Generar clave</b>. Copia la URL del conector.', 'En Claude: Ajustes → Conectores → <b>Añadir conector personalizado</b> y pega la URL.', 'Pídele cosas como «¿Qué tengo para hoy?», «Crea un proyecto para la parada de la línea con estas tareas» o «Prepárame la revisión semanal».'],
+      tips: ['Claude solo accede a tus datos y a los proyectos compartidos contigo.', 'Generar una clave nueva invalida la anterior.'] },
+    { id: 'ajustes', title: 'Ajustes y datos', icon: I.gear, min: 1, go: { name: 'settings' },
+      intro: 'Personaliza Summit a tu manera.',
+      steps: ['<b>Apariencia</b>: claro, oscuro o el del sistema.', '<b>Avisos</b>: días de antelación para las fechas límite y aviso de vencidas.', '<b>Planificación</b>: día de revisión, capacidad diaria, regla de los 2 minutos y zona horaria.', '<b>Datos</b>: sincronizar a mano y exportar una copia de tus datos en JSON.', '<b>Cuenta</b>: nombre, contraseña y cerrar sesión.'] },
+  ] },
+];
+const TUT_ALL = TUTORIAL.flatMap((p) => p.chapters.map((c) => Object.assign({ part: p.part }, c)));
+const tutRead = () => settings().tutorialRead || [];
+const VIEW_NAMES = { today: 'Hoy', inbox: 'la Bandeja', projects: 'Proyectos', next: 'Próximas acciones', calendar: 'el Calendario', waiting: 'En espera', focus: 'Enfoque', matrix: 'la Matriz', review: 'la Revisión semanal', stats: 'Estadísticas', settings: 'Ajustes' };
+function tutorialView() {
+  const read = tutRead(), total = TUT_ALL.length, done = TUT_ALL.filter((c) => read.includes(c.id)).length;
+  const ch = VIEW.ch && TUT_ALL.find((c) => c.id === VIEW.ch);
+  if (!ch) {
+    const mins = TUT_ALL.reduce((a, c) => a + (c.min || 1), 0);
+    const next = TUT_ALL.find((c) => !read.includes(c.id));
+    let n = 0;
+    return `<button class="btn ghost small" ${goAttr({ name: 'settings' })} style="margin:10px 0 0 -8px">‹ Ajustes</button>` + head('Tutorial') +
+      `<div class="card tut-hero"><div class="tut-hero-t"><span class="tut-logo">${LOGO}</span><div><b>Aprende Summit</b><small>${total} capítulos · unos ${mins} minutos</small></div></div>
+        <div class="progress"><i style="width:${(done / total * 100).toFixed(0)}%"></i></div>
+        <small class="muted">${done} de ${total} leídos</small>${next ? `<button class="btn primary tut-next" ${goAttr({ name: 'settings', page: 'tutorial', ch: next.id })}><span>${done ? 'Seguir' : 'Empezar'}</span><small>${esc(next.title)}</small></button>` : '<span class="chip ok" style="align-self:flex-start">Tutorial completado</span>'}</div>` +
+      TUTORIAL.map((p, pi) => `<div class="group"><div class="group-h"><span class="tut-part">${pi + 1}</span>${esc(p.part)}</div><div class="rows">${p.chapters.map((c) => { n++; const r = read.includes(c.id); return `<button class="r tut-r" ${goAttr({ name: 'settings', page: 'tutorial', ch: c.id })}><span class="tut-ic${r ? ' read' : ''}">${r ? '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>' : c.icon}</span><span class="grow"><span class="name">${n}. ${esc(c.title)}</span></span><span class="val">${c.min} min</span><span class="chev">›</span></button>`; }).join('')}</div></div>`).join('') +
+      (done ? `<p class="hint" style="text-align:center"><button class="btn ghost small" data-act="tutreset">Marcar todo como no leído</button></p>` : '');
+  }
+  // Capítulo
+  if (!read.includes(ch.id)) saveSettings({ tutorialRead: [...read, ch.id] });
+  const i = TUT_ALL.indexOf(ch), prev = TUT_ALL[i - 1], nextC = TUT_ALL[i + 1];
+  return `<button class="btn ghost small" ${goAttr({ name: 'settings', page: 'tutorial' })} style="margin:10px 0 0 -8px">‹ Tutorial</button>
+    <div class="tut-head"><span class="tut-ic big">${ch.icon}</span><div><small class="muted">${esc(ch.part)} · Capítulo ${i + 1} de ${TUT_ALL.length}</small><h1>${esc(ch.title)}</h1></div></div>
+    <p class="tut-intro">${esc(ch.intro)}</p>
+    <div class="seclabel">Cómo se hace</div>
+    <ol class="tut-steps">${ch.steps.map((s) => `<li>${s}</li>`).join('')}</ol>
+    ${ch.tips && ch.tips.length ? `<div class="tut-tips"><b>Consejos</b>${ch.tips.map((t) => `<p>${esc(t)}</p>`).join('')}</div>` : ''}
+    ${ch.keys ? `<div class="seclabel">En el ordenador</div><div class="card" style="padding:4px 12px">${ch.keys.map(([k, d]) => `<div class="sc-row"><span>${esc(d)}</span><span class="keys">${k.split(/(\s(?:\+|·)\s)/).map((p, j) => (j % 2 ? `<i>${esc(p.trim())}</i>` : `<kbd>${esc(p)}</kbd>`)).join('')}</span></div>`).join('')}</div>` : ''}
+    ${ch.go ? `<button class="btn primary tut-go" ${goAttr(ch.go)}>Ir a ${esc(ch.go.page ? (ch.go.page === 'atajos' ? 'Atajos de iPhone' : ch.go.page === 'claude' ? 'Claude' : 'Ajustes') : VIEW_NAMES[ch.go.name] || 'la sección')} →</button>` : ''}
+    <div class="tut-nav">${prev ? `<button class="card tut-nb" ${goAttr({ name: 'settings', page: 'tutorial', ch: prev.id })}><small>‹ Anterior</small><span>${esc(prev.title)}</span></button>` : '<span></span>'}${nextC ? `<button class="card tut-nb next" ${goAttr({ name: 'settings', page: 'tutorial', ch: nextC.id })}><small>Siguiente ›</small><span>${esc(nextC.title)}</span></button>` : `<button class="card tut-nb next" ${goAttr({ name: 'settings', page: 'tutorial' })}><small>Fin</small><span>Volver al índice</span></button>`}</div>`;
+}
+Object.assign(ACT, { tutreset: () => { saveSettings({ tutorialRead: [] }); render(); } });
 
 // Tras cargar los datos: comprobar el conector y los avisos del día
 const _render = render;
