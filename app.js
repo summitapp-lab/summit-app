@@ -2,14 +2,14 @@
    PWA sin dependencias de compilación. Datos en Supabase (esquema `summit`), con caché local
    y cola de cambios para funcionar sin conexión. */
 'use strict';
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.4.0';
 const CFG = window.SUMMIT_CONFIG || {};
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); }));
 const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, '');
-const LOGO = '<svg viewBox="0 0 64 64"><path d="M10 45 L24 26 L31 35 L40 19 L54 45"/><circle cx="40" cy="19" r="2.6"/></svg>';
+const LOGO = '<svg class="logo" viewBox="0 0 64 64"><defs><linearGradient id="lg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6C8E77"/><stop offset="1" stop-color="#4A6A55"/></linearGradient></defs><rect width="64" height="64" rx="15" fill="url(#lg)"/><path d="M19 30 L31 48 H7 Z" fill="#fff" fill-opacity=".35"/><path d="M35 14 L55 48 H15 Z" fill="#fff"/><path d="M35 14 L55 48 H37.5 L33 32 Z" fill="#D9E5DC"/><path d="M35 14 L40.6 23.5 L36.6 22 L33.9 24.6 L31.6 22.4 L29.4 23.6 Z" fill="#4A6A55" fill-opacity=".85"/></svg>';
 const I = {
   cal: '<svg class="ic" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>',
   flag: '<svg class="ic" viewBox="0 0 24 24"><path d="M6 21V4M6 4h11l-2 4 2 4H6"/></svg>',
@@ -47,6 +47,7 @@ let sb = null, ME = null, MEMAIL = '', MENAME = '';
 let S = { profile: null, areas: [], projects: [], members: [], tasks: [], focus: [] };
 let Q = [];
 let VIEW = { name: 'today' };
+let FOCUS = null; // tarea seleccionada con el teclado (o la última creada)
 let OFFLINE = !navigator.onLine;
 let flushing = false, reloadTimer = null, channel = null;
 
@@ -251,13 +252,15 @@ function parsePending() {
     if (p.priority) patch.priority = p.priority;
     if (p.due_date) patch.due_date = p.due_date;
     if (p.due_time) patch.due_time = p.due_time;
+    if (p.deadline) patch.deadline = p.deadline;
+    if (p.section && p.project_id) patch.section = p.section;
     upd('tasks', t.id, patch);
   }
 }
 
 /* ---------- Pantallas de acceso ---------- */
 function showAuth(mode = 'login', msg = '') {
-  $('#app').hidden = true; closeSheet(); closeDrawer();
+  $('#app').hidden = true; closeSheet(true); document.body.classList.remove('pinned'); $('#drawer').hidden = true; $('#drawer-scrim').hidden = true;
   const a = $('#auth'); a.hidden = false;
   const head = `<span class="auth-logo">${LOGO}</span><h1>Summit</h1>`;
   const forms = {
@@ -394,11 +397,12 @@ function alerts() {
 }
 
 /* ---------- Navegación ---------- */
-function showApp() { $('#auth').hidden = true; $('#app').hidden = false; bindChrome(); render(); }
+function showApp() { $('#auth').hidden = true; $('#app').hidden = false; bindChrome(); render(); applyPin(); }
 let chromeBound = false;
 function bindChrome() {
   if (chromeBound) return; chromeBound = true;
-  $('#btn-menu').onclick = openDrawer;
+  $('#btn-menu').onclick = () => (pinnedNow() ? togglePin() : openDrawer());
+  window.addEventListener('resize', applyPin);
   $('#btn-stats').onclick = () => go(VIEW.name === 'project' ? { name: 'stats', tab: 'project', id: VIEW.id } : { name: 'stats' });
   $('#btn-search').onclick = openSearch;
   $('#btn-bell').onclick = openBell;
@@ -406,7 +410,7 @@ function bindChrome() {
   $$('#tabbar button').forEach((b) => b.onclick = () => go({ name: b.dataset.view }));
   bindGestures(); bindKeys(); bindViewport();
 }
-function go(v) { VIEW = v; closeDrawer(); closeOverlay(); render(); window.scrollTo(0, 0); }
+function go(v) { VIEW = v; closeDrawer(); closeOverlay(); render(); if (FOCUS && !$(`#view .task[data-task="${FOCUS}"]`)) FOCUS = null; window.scrollTo(0, 0); }
 function render() {
   if (!S.profile || $('#app').hidden) return;
   setOffline(OFFLINE || Q.length > 0 && !navigator.onLine);
@@ -443,7 +447,7 @@ function row(t, o = {}) {
     if (t.priority < 4 && o.showPrio) right.push(`<span class="prio-tag">P${t.priority}</span>`);
   }
   if (t.project_id && !o.noProject) right.push(`<i class="pdot" style="background:${projColor(t.project_id)}"></i>`);
-  return `<div class="task${t.status === 'done' ? ' done' : ''}" data-task="${t.id}">
+  return `<div class="task${t.status === 'done' ? ' done' : ''}${t.id === FOCUS ? ' focused' : ''}" data-task="${t.id}">
     <button class="check p${t.priority}${t.status === 'done' ? ' on' : ''}" data-check="${t.id}" aria-label="Completar"></button>
     <div class="t-body"><div class="t-title">${esc(t.title)}</div>${sub.length ? `<div class="t-sub">${sub.join('')}</div>` : ''}</div>
     ${right.length ? `<div class="t-right">${right.join('')}</div>` : ''}</div>`;
@@ -456,7 +460,10 @@ const empty = (t, s = '') => `<div class="empty">${esc(t)}${s ? `<small>${esc(s)
 function bindView() {
   const v = $('#view');
   $$('[data-check]', v).forEach((b) => b.onclick = (e) => { e.stopPropagation(); toggleDone(b.dataset.check); });
-  $$('[data-task]', v).forEach((r) => r.onclick = () => openTask(r.dataset.task));
+  $$('[data-task]', v).forEach((r) => {
+    r.onclick = () => openTask(r.dataset.task);
+    r.onmouseenter = () => { if (hoverOk()) setFocus(r.dataset.task, false); };
+  });
   $$('[data-add]', v).forEach((b) => b.onclick = () => openQuick(quickDefaults(b.dataset)));
   $$('[data-go]', v).forEach((b) => b.onclick = () => go(JSON.parse(b.dataset.go)));
   $$('[data-act]', v).forEach((b) => {
@@ -677,8 +684,25 @@ function toast(msg, action, fn, err = false) {
 
 /* ---------- Drawer ---------- */
 let drawerMore = LS.get('summit-drawer-more', false);
-function openDrawer() { $('#drawer').hidden = false; $('#drawer-scrim').hidden = false; $('#drawer-scrim').onclick = closeDrawer; renderDrawer(); }
-function closeDrawer() { $('#drawer').hidden = true; $('#drawer-scrim').hidden = true; }
+// En pantallas anchas (PC) el menú se puede fijar a la izquierda; la preferencia se recuerda en el dispositivo
+let PINNED = LS.get('summit-pin', false);
+const wide = () => (window.matchMedia ? matchMedia('(min-width: 1024px)').matches : window.innerWidth >= 1024);
+const pinnedNow = () => PINNED && wide();
+function applyPin() {
+  const on = pinnedNow();
+  document.body.classList.toggle('pinned', on);
+  if (on) { $('#drawer').hidden = false; $('#drawer-scrim').hidden = true; if (S.profile) renderDrawer(); }
+  else if (!$('#drawer').hidden && $('#drawer-scrim').hidden) $('#drawer').hidden = true;
+}
+function togglePin() {
+  PINNED = !PINNED; LS.set('summit-pin', PINNED);
+  if (!PINNED) { document.body.classList.remove('pinned'); $('#drawer').hidden = true; $('#drawer-scrim').hidden = true; }
+  applyPin();
+  toast(PINNED ? 'Menú fijado' : 'Menú suelto');
+}
+function toggleSidebar() { if (wide()) togglePin(); else if ($('#drawer').hidden) openDrawer(); else closeDrawer(); }
+function openDrawer() { if (pinnedNow()) return; $('#drawer').hidden = false; $('#drawer-scrim').hidden = false; $('#drawer-scrim').onclick = closeDrawer; renderDrawer(); }
+function closeDrawer() { if (pinnedNow()) return; $('#drawer').hidden = true; $('#drawer-scrim').hidden = true; }
 function renderDrawer() {
   const on = (n, extra = {}) => VIEW.name === n && Object.keys(extra).every((k) => VIEW[k] === extra[k]) ? ' on' : '';
   const item = (v, icon, label, right = '') => `<button class="d-item${on(v.name, Object.fromEntries(Object.entries(v).filter(([k]) => k !== 'name')))}" ${goAttr(v)}>${icon}<span>${esc(label)}</span>${right}</button>`;
@@ -686,7 +710,7 @@ function renderDrawer() {
   const filters = settings().filters || [];
   const name = (S.profile && S.profile.name) || MENAME || MEMAIL;
   const d = $('#drawer');
-  d.innerHTML = `<div class="d-brand"><span class="mark"><svg viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9"/></svg></span><b>Summit</b></div>
+  d.innerHTML = `<div class="d-brand"><span class="mark">${LOGO}</span><b>Summit</b><button class="d-pin${PINNED ? ' on' : ''}" data-dact="pin" aria-label="${PINNED ? 'Soltar el menú' : 'Fijar el menú'}" title="${PINNED ? 'Soltar el menú (M)' : 'Fijar el menú (M)'}">${PINNED ? '<svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/><path d="M14.5 10l-2 2 2 2"/></svg>' : '<svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/><path d="M12.5 10l2 2-2 2"/></svg>'}</button></div>
     <div class="scroll">
     ${item({ name: 'inbox' }, I.inbox, 'Bandeja', inboxTasks().length ? `<span class="n plain">${inboxTasks().length}</span>` : '')}
     ${item({ name: 'today' }, '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/></svg>', 'Hoy', nToday ? `<span class="n">${nToday}</span>` : '')}
@@ -714,6 +738,7 @@ function renderDrawer() {
   $$('[data-dact]', d).forEach((b) => b.onclick = () => {
     const a = b.dataset.dact;
     if (a === 'more') { drawerMore = !drawerMore; LS.set('summit-drawer-more', drawerMore); renderDrawer(); }
+    if (a === 'pin') togglePin();
     if (a === 'join') { closeDrawer(); joinProject(); }
     if (a === 'newproj') { closeDrawer(); editProject(null); }
     if (a === 'newfilter') { closeDrawer(); editFilter(); }
@@ -721,26 +746,41 @@ function renderDrawer() {
 }
 
 /* ---------- Hoja (sheet) genérica ---------- */
-let sheetCtx = null;
+let sheetCtx = null, sheetTimer = null;
+const reducedMotion = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+const sheetOpen = () => { const sh = $('#sheet'); return !!sh && !sh.hidden && !sh.classList.contains('closing'); };
+function resetSheetStyle() { const sh = $('#sheet'), sc = $('#sheet-scrim'); sh.style.transform = ''; sh.style.transition = ''; sc.style.opacity = ''; sc.style.transition = ''; sh.classList.remove('closing'); sc.classList.remove('closing'); }
 function openSheet(html, o = {}) {
-  closePop();
+  closePop(); clearTimeout(sheetTimer); resetSheetStyle();
   const sh = $('#sheet'); sh.className = o.top ? 'top' : o.full ? 'full' : '';
   sh.innerHTML = (o.top ? '' : '<div class="sheet-grab"></div>') + html;
   sh.hidden = false; $('#sheet-scrim').hidden = false;
   $('#sheet-scrim').onclick = () => { if (!o.modal) closeSheet(); };
   sheetCtx = o; return sh;
 }
-function closeSheet() { const sh = $('#sheet'); if (!sh || sh.hidden) return; if (sheetCtx && sheetCtx.onClose) sheetCtx.onClose(); sh.hidden = true; $('#sheet-scrim').hidden = true; sh.innerHTML = ''; sheetCtx = null; closePop(); }
+// instant = true cierra sin animación (por ejemplo, al terminar el gesto de arrastre, que ya ha animado la salida)
+function closeSheet(instant) {
+  const sh = $('#sheet'); if (!sh || sh.hidden || sh.classList.contains('closing')) return;
+  if (sheetCtx && sheetCtx.onClose) sheetCtx.onClose();
+  sheetCtx = null; closePop();
+  const done = () => { sh.hidden = true; $('#sheet-scrim').hidden = true; sh.innerHTML = ''; resetSheetStyle(); };
+  if (instant === true || reducedMotion()) { clearTimeout(sheetTimer); done(); return; }
+  sh.classList.add('closing'); $('#sheet-scrim').classList.add('closing');
+  clearTimeout(sheetTimer); sheetTimer = setTimeout(done, 190);
+}
 function refreshSheet() { if (sheetCtx && sheetCtx.refresh) sheetCtx.refresh(); }
 
 /* ---------- Selector flotante ---------- */
+// POPK: estado del teclado en el selector abierto (elemento resaltado y función para redibujar)
+let POPK = { i: -1, draw: null, items: [] };
 function openPop({ title, items, search, multi, onPick, onDone, kb }) {
   const p = $('#pop'); p.hidden = false; p.className = kb ? 'kb' : '';
+  POPK = { i: Math.max(0, items.findIndex((x) => x.sel)), draw: null, items };
   let sel = new Set(items.filter((i) => i.sel).map((i) => i.label));
   const draw = (q = '') => {
     const nq = norm(q);
     const l = items.filter((i) => !nq || norm(i.label).includes(nq));
-    $('.pop-list', p).innerHTML = l.map((i, n) => `<button class="pop-i${(multi ? sel.has(i.label) : i.sel) ? ' sel' : ''}" data-n="${items.indexOf(i)}">${i.icon || ''}<span>${esc(i.label)}</span>${i.k ? `<span class="k">${esc(i.k)}</span>` : ''}${(multi ? sel.has(i.label) : i.sel) ? '<span class="tick">✓</span>' : ''}</button>`).join('') || '<div class="hint" style="padding:8px">Sin resultados</div>';
+    $('.pop-list', p).innerHTML = l.map((i, n) => `<button class="pop-i${(multi ? sel.has(i.label) : i.sel) ? ' sel' : ''}${n === POPK.i ? ' kfocus' : ''}" data-n="${items.indexOf(i)}">${i.icon || ''}<span>${esc(i.label)}</span>${i.k ? `<span class="k">${esc(i.k)}</span>` : ''}${(multi ? sel.has(i.label) : i.sel) ? '<span class="tick">✓</span>' : ''}</button>`).join('') || '<div class="hint" style="padding:8px">Sin resultados</div>';
     $$('.pop-i', p).forEach((b) => b.onclick = () => {
       const it = items[Number(b.dataset.n)];
       if (multi) { sel.has(it.label) ? sel.delete(it.label) : sel.add(it.label); draw($('.pop-search', p) ? $('.pop-search', p).value : ''); onPick && onPick(it, sel.has(it.label)); }
@@ -748,25 +788,41 @@ function openPop({ title, items, search, multi, onPick, onDone, kb }) {
     });
   };
   p.innerHTML = `<div class="pop-h"><span>${esc(title)}</span>${multi ? '<button class="btn primary small" data-done>Listo</button>' : ''}</div>${search ? '<input class="field pop-search" placeholder="Buscar…">' : ''}<div class="pop-list"></div>`;
+  POPK.draw = draw;
   draw();
-  if (search) { const s = $('.pop-search', p); s.oninput = () => draw(s.value); s.onkeydown = (e) => { if (e.key === 'Enter') { const f = $('.pop-i', p); if (f) f.click(); } }; if (!('ontouchstart' in window)) s.focus(); }
+  if (search) { const s = $('.pop-search', p); s.oninput = () => { POPK.i = 0; draw(s.value); }; if (!('ontouchstart' in window)) s.focus(); }
   if (multi) $('[data-done]', p).onclick = () => { closePop(); onDone && onDone([...sel]); };
   setTimeout(() => document.addEventListener('pointerdown', popOutside, true), 0);
 }
 function popOutside(e) { const p = $('#pop'); if (p && !p.hidden && !p.contains(e.target)) { if (e.target.closest && e.target.closest('.qchip,.kv button.v')) return; const done = $('[data-done]', p); if (done) done.click(); else closePop(); } }
-function closePop() { const p = $('#pop'); if (p) { p.hidden = true; p.innerHTML = ''; } document.removeEventListener('pointerdown', popOutside, true); }
+function closePop() { const p = $('#pop'); if (p) { p.hidden = true; p.innerHTML = ''; } POPK = { i: -1, draw: null, items: [] }; document.removeEventListener('pointerdown', popOutside, true); }
+// Teclado dentro del selector: ↑ ↓ para moverse, Enter para elegir, Esc para cerrar, y la tecla rápida de cada opción
+function popKey(e) {
+  const p = $('#pop'); if (!p || p.hidden) return false;
+  if (e.target && e.target.closest && e.target.closest('input,textarea') && !p.contains(e.target)) return false;
+  const btns = $$('.pop-i', p);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (!btns.length) return true; POPK.i = (POPK.i + (e.key === 'ArrowDown' ? 1 : btns.length - 1)) % btns.length; POPK.draw($('.pop-search', p) ? $('.pop-search', p).value : ''); const b = $$('.pop-i', p)[POPK.i]; if (b && b.scrollIntoView) b.scrollIntoView({ block: 'nearest' }); return true; }
+  if (e.key === 'Enter') { e.preventDefault(); const b = btns[Math.max(0, POPK.i)]; if (b) b.click(); else { const d = $('[data-done]', p); if (d) d.click(); } return true; }
+  if (e.key === 'Escape') { e.preventDefault(); const d = $('[data-done]', p); if (d) d.click(); else closePop(); return true; }
+  const typing = e.target && e.target.classList && e.target.classList.contains('pop-search');
+  if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    const hit = btns.find((b) => { const it = POPK.items[Number(b.dataset.n)]; return it && it.hot && it.hot === e.key.toLowerCase(); });
+    if (hit) { e.preventDefault(); hit.click(); return true; }
+  }
+  return false;
+}
 
 const SUN = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2"/></svg>';
 function pickDate(title, cur, cb, kb) {
   const t = today(), sat = (() => { let d = t; while (dow(d) !== 6) d = addDays(d, 1); return d === t ? addDays(t, 7) : d; })(), mon = (() => { let d = addDays(t, 1); while (dow(d) !== 1) d = addDays(d, 1); return d; })();
   const short = (d) => ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'][dow(d)];
   openPop({ title, kb, items: [
-    { label: 'Hoy', icon: SUN, k: short(t), v: t, sel: cur === t },
-    { label: 'Mañana', icon: '<svg viewBox="0 0 24 24"><path d="M12 4v3M5 12H2M22 12h-3M7 17a5 5 0 0 1 10 0M3 20h18"/></svg>', k: short(addDays(t, 1)), v: addDays(t, 1), sel: cur === addDays(t, 1) },
-    { label: 'Fin de semana', icon: I.soon, k: short(sat), v: sat, sel: cur === sat },
-    { label: 'Próxima semana', icon: I.soon, k: short(mon), v: mon, sel: cur === mon },
+    { label: 'Hoy', icon: SUN, k: short(t), v: t, sel: cur === t, hot: 'h' },
+    { label: 'Mañana', icon: '<svg viewBox="0 0 24 24"><path d="M12 4v3M5 12H2M22 12h-3M7 17a5 5 0 0 1 10 0M3 20h18"/></svg>', k: short(addDays(t, 1)), v: addDays(t, 1), sel: cur === addDays(t, 1), hot: 'm' },
+    { label: 'Fin de semana', icon: I.soon, k: short(sat), v: sat, sel: cur === sat, hot: 'f' },
+    { label: 'Próxima semana', icon: I.soon, k: short(mon), v: mon, sel: cur === mon, hot: 's' },
     { label: cur && ![t, addDays(t, 1), sat, mon].includes(cur) ? 'Elegida: ' + fmtDate(cur) : 'Elegir fecha…', icon: I.soon, v: 'pick', sel: cur && ![t, addDays(t, 1), sat, mon].includes(cur) },
-    { label: 'Sin fecha', icon: I.close, v: null, sel: !cur },
+    { label: 'Sin fecha', icon: I.close, v: null, sel: !cur, hot: 'x' },
   ], onPick: (it) => { if (it.v === 'pick') nativeDate(cur, cb); else cb(it.v); } });
 }
 function nativeDate(cur, cb) {
@@ -783,98 +839,202 @@ function pickProject(cur, cb, o = {}) {
 }
 function pickPriority(cur, cb, kb) {
   const c = ['var(--red)', 'var(--amber)', 'var(--blue)', 'var(--ink3)'];
-  openPop({ title: 'Prioridad', kb, items: [1, 2, 3, 4].map((n) => ({ label: n < 4 ? 'Prioridad ' + n : 'Sin prioridad', icon: `<i class="pdot" style="background:${c[n - 1]};margin:0 4px"></i>`, k: String(n), v: n, sel: cur === n })), onPick: (it) => cb(it.v) });
+  openPop({ title: 'Prioridad', kb, items: [1, 2, 3, 4].map((n) => ({ label: n < 4 ? 'Prioridad ' + n : 'Sin prioridad', icon: `<i class="pdot" style="background:${c[n - 1]};margin:0 4px"></i>`, k: String(n), v: n, sel: cur === n, hot: String(n) })), onPick: (it) => cb(it.v) });
 }
 function pickContexts(cur, cb, kb) {
   openPop({ title: 'Contextos', search: true, multi: true, kb, items: contexts().map((c) => ({ label: '@' + c, v: c, sel: (cur || []).includes(c) })), onDone: (sel) => cb(sel.map((s) => s.replace(/^@/, ''))) });
 }
 
-/* ---------- Añadir rápido ---------- */
-function parseQuick(text) {
-  const out = { title: text, project_id: null, contexts: [], priority: 0, due_date: null, due_time: null };
-  let s = ' ' + text + ' ';
-  s = s.replace(/\s!([1-4])(?=\s)/g, (_, n) => { out.priority = Number(n); return ' '; });
-  s = s.replace(/\s@([\p{L}\d_-]+)(?=\s)/gu, (m, c) => { const f = contexts().find((x) => norm(x) === norm(c)) || contexts().find((x) => norm(x).startsWith(norm(c))); if (f) { out.contexts.push(f); return ' '; } return m; });
-  s = s.replace(/\s#([\p{L}\d_-]+)(?=\s)/gu, (m, c) => { const f = activeProjects().find((p) => norm(p.name) === norm(c)) || activeProjects().find((p) => norm(p.name).startsWith(norm(c))); if (f) { out.project_id = f.id; return ' '; } return m; });
-  s = s.replace(/\s(?:a las\s)?(\d{1,2}):(\d{2})(?=\s)/i, (m, h, mi) => { if (Number(h) < 24 && Number(mi) < 60) { out.due_time = h.padStart(2, '0') + ':' + mi; return ' '; } return m; });
-  const t = today();
-  s = s.replace(/\s(pasado mañana|pasado manana)(?=\s)/i, () => { out.due_date = addDays(t, 2); return ' '; });
-  s = s.replace(/\s(hoy)(?=\s)/i, () => { out.due_date = t; return ' '; });
-  s = s.replace(/\s(mañana|manana)(?=\s)/i, () => { out.due_date = addDays(t, 1); return ' '; });
-  s = s.replace(/\s(?:el\s)?(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo)(?=\s)/i, (m, d) => { const i = DIAS.findIndex((x) => norm(x) === norm(d)); let n = addDays(t, 1); while (dow(n) !== i) n = addDays(n, 1); out.due_date = n; return ' '; });
-  if (out.due_time && !out.due_date) out.due_date = t;
+/* ---------- Añadir rápido (sintaxis de Todoist) ----------
+   #proyecto  /sección  @contexto o %contexto  +persona  p1–p4  {fecha límite}
+   Fechas en lenguaje natural: hoy, mañana, pasado mañana, el viernes, 3/11, en 5 días, fin de semana,
+   próxima semana, y horas (10:00, a las 9:30). */
+function nextWeekday(i, from) { let n = addDays(from || today(), 1); while (dow(n) !== i) n = addDays(n, 1); return n; }
+function weekendDay() { const t = today(); return dow(t) === 6 ? addDays(t, 7) : nextWeekday(6); }
+// Convierte una expresión de fecha en AAAA-MM-DD (o null si no la reconoce)
+function parseDateWord(w) {
+  const t = today(), s = norm(w).replace(/^(el|para|hasta)/, '');
+  if (!s) return null;
+  if (s === 'hoy') return t;
+  if (s === 'manana') return addDays(t, 1);
+  if (s === 'pasadomanana') return addDays(t, 2);
+  if (s === 'findesemana' || s === 'finde' || s === 'elfindesemana') return weekendDay();
+  if (s === 'proximasemana' || s === 'semanaqueviene' || s === 'lasemanaqueviene') return nextWeekday(1);
+  const i = DIAS.findIndex((d) => norm(d) === s); if (i >= 0) return nextWeekday(i);
+  let m = s.match(/^en(\d{1,3})dias?$/); if (m) return addDays(t, Number(m[1]));
+  m = s.match(/^en(\d{1,2})semanas?$/); if (m) return addDays(t, 7 * Number(m[1]));
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/); if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = s.match(/^(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?$/);
+  if (m) {
+    const d = Number(m[1]), mo = Number(m[2]); if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    let y = m[3] ? Number(m[3].length === 2 ? '20' + m[3] : m[3]) : Number(t.slice(0, 4));
+    const iso = (yy) => `${yy}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    if (!m[3] && iso(y) < t) y += 1;
+    return iso(y);
+  }
+  return null;
+}
+const DATE_PHRASES = /(^|\s)((?:el\s|para\s)?(?:pasado\s+ma[ñn]ana|ma[ñn]ana|hoy|fin\s+de\s+semana|finde|pr[oó]xima\s+semana|la\s+semana\s+que\s+viene|en\s+\d{1,3}\s+d[ií]as?|en\s+\d{1,2}\s+semanas?|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|\d{4}-\d{2}-\d{2}))(?=\s|$)/i;
+function parseQuick(text, base = {}) {
+  const out = { title: text, project_id: null, section: null, contexts: [], priority: 0, due_date: null, due_time: null, deadline: null, assignee: null, tokens: [] };
+  let s = ' ' + String(text || '').replace(/\s+/g, ' ') + ' ';
+  const take = (re, fn) => { s = s.replace(re, (...a) => { const r = fn(...a); if (r === false) return a[0]; return ' '; }); };
+  // Fecha límite entre llaves: {viernes}, {3/11}
+  take(/\{([^}]*)\}/g, (m, w) => { const d = parseDateWord(w); if (!d) return false; out.deadline = d; out.tokens.push('deadline'); });
+  // Prioridad: p1–p4 (Todoist). También se acepta !1–!4 por compatibilidad con versiones anteriores
+  take(/\s[pP!]([1-4])(?=\s)/g, (m, n) => { out.priority = Number(n); out.tokens.push('priority'); });
+  // Proyecto
+  take(/\s#([\p{L}\d_.-]+)(?=\s)/gu, (m, c) => { const f = activeProjects().find((p) => norm(p.name) === norm(c)) || activeProjects().find((p) => norm(p.name).startsWith(norm(c))); if (!f) return false; out.project_id = f.id; out.tokens.push('project'); });
+  // Sección (del proyecto escrito o del que ya estaba elegido)
+  take(/\s\/([\p{L}\d_.-]+)(?=\s)/gu, (m, c) => { const p = PJ(out.project_id || base.project_id); const f = p && (p.sections || []).find((x) => norm(x) === norm(c) || norm(x).startsWith(norm(c))); if (!f) return false; out.section = f; out.tokens.push('section'); });
+  // Contextos: @ o % (Todoist usa % para etiquetas)
+  take(/\s[@%]([\p{L}\d_.-]+)(?=\s)/gu, (m, c) => { const f = contexts().find((x) => norm(x) === norm(c)) || contexts().find((x) => norm(x).startsWith(norm(c))); if (!f) return false; out.contexts.push(f); out.tokens.push('ctx'); });
+  // Persona asignada (solo en proyectos compartidos)
+  take(/\s\+([\p{L}\d_.-]+)(?=\s)/gu, (m, c) => { const pid = out.project_id || base.project_id; const mm = pid && membersOf(pid).find((x) => norm(x.display_name).startsWith(norm(c)) || (norm(c) === 'yo' && x.user_id === ME)); if (!mm) return false; out.assignee = mm.user_id; out.tokens.push('assignee'); });
+  // Hora
+  take(/\s(?:a\s+las\s+)?(\d{1,2}):(\d{2})(?=\s)/i, (m, h, mi) => { if (Number(h) > 23 || Number(mi) > 59) return false; out.due_time = h.padStart(2, '0') + ':' + mi; out.tokens.push('time'); });
+  // Fecha en lenguaje natural (la primera que aparezca)
+  const dm = s.match(DATE_PHRASES);
+  if (dm) { const d = parseDateWord(dm[2]); if (d) { out.due_date = d; out.tokens.push('date'); s = s.replace(dm[0], dm[1] || ' '); } }
+  if (out.due_time && !out.due_date) out.due_date = today();
   out.title = s.replace(/\s+/g, ' ').trim();
   return out;
 }
+// Sugerencias mientras se escribe tras un símbolo
+function quickSuggestions(sym, q, st) {
+  const nq = norm(q), match = (x) => !nq || norm(x).includes(nq);
+  const pid = st.project_id;
+  if (sym === '#') return [{ label: 'Bandeja', v: null, icon: I.inbox }, ...activeProjects().map((p) => ({ label: p.name, v: p.id, icon: `<i class="pdot" style="background:${esc(p.color)}"></i>` }))].filter((x) => match(x.label));
+  if (sym === '/') { const p = PJ(pid); return p ? (p.sections || []).filter(match).map((x) => ({ label: x, v: x, icon: I.sub })) : []; }
+  if (sym === '@' || sym === '%') return contexts().filter(match).map((x) => ({ label: x, v: x, icon: I.at }));
+  if (sym === '+') return pid ? membersOf(pid).map((m) => ({ label: m.user_id === ME ? 'Yo' : m.display_name || 'Miembro', v: m.user_id, icon: I.user })).filter((x) => match(x.label)) : [];
+  if (sym === '{') return [['Hoy', today()], ['Mañana', addDays(today(), 1)], ['Fin de semana', weekendDay()], ['Próxima semana', nextWeekday(1)]].map(([l, v]) => ({ label: l, v, icon: I.flag, k: fmtDate(v) })).filter((x) => match(x.label));
+  return [];
+}
+const SYM_NAMES = { '#': 'Proyecto', '/': 'Sección', '@': 'Contexto', '%': 'Contexto', '+': 'Asignar a', '{': 'Fecha límite' };
+
 function openQuick(defaults) {
   defaults = defaults || viewDefaults();
-  const st = { project_id: defaults.project_id || null, section: defaults.section || null, due_date: defaults.due_date || null, deadline: null, priority: 4, contexts: defaults.contexts || [], photos: [] };
-  let expanded = !!(st.project_id || st.due_date || st.contexts.length);
+  // set: lo elegido a mano (chips o sugerencias) manda sobre lo escrito
+  const st = { project_id: defaults.project_id || null, section: defaults.section || null, due_date: defaults.due_date || null, due_time: null, deadline: null, priority: 4, contexts: defaults.contexts || [], assignee: null, photos: [], set: {} };
+  let expanded = !!(st.project_id || st.due_date || st.contexts.length), sugg = [], sel = 0, trig = null;
   const sh = openSheet(`<div class="sheet-body" style="padding-top:14px">
-      <input class="qa-input" id="qa-title" placeholder="Nueva tarea" autocomplete="off" enterkeyhint="done">
-      <div class="suggest" id="qa-sug"></div>
+      <textarea class="qa-input grow" id="qa-title" rows="1" placeholder="Nueva tarea" autocomplete="off" enterkeyhint="done" spellcheck="true"></textarea>
+      <div class="suggest-box" id="qa-sug" hidden></div>
       <div id="qa-opts"></div>
       <div class="qa-photos" id="qa-ph"></div>
+      <div class="qa-hint">#proyecto · /sección · @contexto · p1 · mañana 10:00 · {fecha límite}</div>
       <div class="qa-foot"><label class="icon-btn" aria-label="Foto">${I.cam.replace('class="ic"', '')}<input type="file" accept="image/*" id="qa-file" hidden multiple></label><span class="grow"></span><button class="btn ghost small" id="qa-cancel">Cancelar</button><button class="btn primary small" id="qa-add">Añadir</button></div>
-    </div>`, { top: true, onClose: () => document.documentElement.style.removeProperty('--qa') });
+    </div>`, { top: true, quick: true });
   const inp = $('#qa-title', sh);
+  // Valores finales = elegidos a mano > escritos en el texto > valores por defecto de la vista
+  const merged = () => {
+    const p = parseQuick(inp.value, st), pick = (k, pv) => (st.set[k] ? st[k] : (pv || st[k]));
+    const project_id = st.set.project_id ? st.project_id : (p.project_id || st.project_id);
+    return {
+      p, project_id,
+      section: st.set.section ? st.section : (p.section || (p.project_id && p.project_id !== st.project_id ? null : st.section)),
+      due_date: pick('due_date', p.due_date), due_time: st.set.due_date ? st.due_time : (p.due_time || st.due_time),
+      deadline: pick('deadline', p.deadline), priority: st.set.priority ? st.priority : (p.priority || st.priority),
+      contexts: [...new Set([...st.contexts, ...p.contexts])], assignee: st.set.assignee ? st.assignee : (p.assignee || st.assignee),
+    };
+  };
   const drawOpts = () => {
-    const o = $('#qa-opts', sh);
+    const o = $('#qa-opts', sh), m = merged();
+    if (m.p.tokens.length) expanded = true;
     if (!expanded) { o.innerHTML = `<button class="qa-more" id="qa-more">··· Más</button>`; $('#qa-more', sh).onclick = () => { expanded = true; drawOpts(); }; return; }
-    const p = st.project_id && PJ(st.project_id);
+    const p = m.project_id && PJ(m.project_id), shared = m.project_id && membersOf(m.project_id).length > 1;
     o.innerHTML = `<div class="qa-chips">
-      <button class="qchip${p ? ' set' : ''}" data-c="project">${p ? `<i class="pdot" style="background:${esc(p.color)}"></i>${esc(p.name)}${st.section ? ' · ' + esc(st.section) : ''}` : I.inbox.replace('<svg', '<svg class="ic"') + 'Bandeja'}</button>
-      <button class="qchip${st.due_date ? ' set' : ''}" data-c="date">${I.cal}${st.due_date ? esc(fmtDate(st.due_date)) : 'Fecha'}</button>
-      <button class="qchip${st.deadline ? ' set' : ''}" data-c="deadline">${I.flag}${st.deadline ? esc(fmtDate(st.deadline)) : 'Límite'}</button>
-      <button class="qchip${st.priority < 4 ? ' set' : ''}" data-c="prio">${I.flag}${st.priority < 4 ? 'P' + st.priority : 'Prioridad'}</button>
-      <button class="qchip${st.contexts.length ? ' set' : ''}" data-c="ctx">${I.at}${st.contexts.length ? st.contexts.map(esc).join(', ') : 'Contexto'}</button></div>`;
+      <button class="qchip${p ? ' set' : ''}" data-c="project">${p ? `<i class="pdot" style="background:${esc(p.color)}"></i>${esc(p.name)}${m.section ? ' · ' + esc(m.section) : ''}` : I.inbox.replace('<svg', '<svg class="ic"') + 'Bandeja'}</button>
+      <button class="qchip${m.due_date ? ' set' : ''}" data-c="date">${I.cal}${m.due_date ? esc(fmtDate(m.due_date)) + (m.due_time ? ' ' + esc(m.due_time) : '') : 'Fecha'}</button>
+      <button class="qchip${m.deadline ? ' set' : ''}" data-c="deadline">${I.flag}${m.deadline ? esc(fmtDate(m.deadline)) : 'Límite'}</button>
+      <button class="qchip${m.priority < 4 ? ' set' : ''}" data-c="prio">${I.flag}${m.priority < 4 ? 'P' + m.priority : 'Prioridad'}</button>
+      <button class="qchip${m.contexts.length ? ' set' : ''}" data-c="ctx">${I.at}${m.contexts.length ? m.contexts.map(esc).join(', ') : 'Contexto'}</button>
+      ${shared ? `<button class="qchip${m.assignee ? ' set' : ''}" data-c="assignee">${I.user}${m.assignee ? esc(personName(m.assignee)) : 'Asignar'}</button>` : ''}</div>`;
     $$('.qchip', o).forEach((b) => b.onclick = () => {
-      const c = b.dataset.c, kb = true;
-      if (c === 'project') pickProject(st.project_id, (v) => { st.project_id = v; st.section = null; drawOpts(); }, { kb });
-      if (c === 'date') pickDate('Fecha', st.due_date, (v) => { st.due_date = v; drawOpts(); }, kb);
-      if (c === 'deadline') pickDate('Fecha límite', st.deadline, (v) => { st.deadline = v; drawOpts(); }, kb);
-      if (c === 'prio') pickPriority(st.priority, (v) => { st.priority = v; drawOpts(); }, kb);
-      if (c === 'ctx') pickContexts(st.contexts, (v) => { st.contexts = v; drawOpts(); }, kb);
+      const c = b.dataset.c, kb = true, mm = merged();
+      if (c === 'project') pickProject(mm.project_id, (v) => { st.project_id = v; st.section = null; st.set.project_id = st.set.section = true; drawOpts(); }, { kb });
+      if (c === 'date') pickDate('Fecha', mm.due_date, (v) => { st.due_date = v; st.due_time = v ? mm.due_time : null; st.set.due_date = true; drawOpts(); }, kb);
+      if (c === 'deadline') pickDate('Fecha límite', mm.deadline, (v) => { st.deadline = v; st.set.deadline = true; drawOpts(); }, kb);
+      if (c === 'prio') pickPriority(mm.priority, (v) => { st.priority = v; st.set.priority = true; drawOpts(); }, kb);
+      if (c === 'ctx') pickContexts(mm.contexts, (v) => { st.contexts = v; inp.value = inp.value.replace(/(^|\s)[@%][\p{L}\d_.-]+(?=\s|$)/gu, '$1').replace(/\s+/g, ' '); drawOpts(); }, kb);
+      if (c === 'assignee') pickAssignee(mm.project_id, mm.assignee, (v) => { st.assignee = v; st.set.assignee = true; drawOpts(); }, kb);
     });
   };
   const drawPhotos = () => { $('#qa-ph', sh).innerHTML = st.photos.map((b) => `<img src="${URL.createObjectURL(b)}" alt="">`).join(''); };
+  // Sugerencias tras #, /, @, %, + o {
+  const drawSugg = () => {
+    const box = $('#qa-sug', sh), upto = inp.value.slice(0, inp.selectionStart);
+    const m = upto.match(/(^|\s)([#/@%+])([^\s#@%+{}]*)$/u) || upto.match(/(\{)([^}]*)$/) && ['', '', '{', upto.match(/\{([^}]*)$/)[1]];
+    if (!m) { box.hidden = true; sugg = []; trig = null; return; }
+    trig = { sym: m[2], q: m[3], start: upto.length - m[3].length - 1 };
+    sugg = quickSuggestions(trig.sym, trig.q, { project_id: merged().project_id }).slice(0, 8);
+    if (!sugg.length) { box.hidden = true; return; }
+    sel = Math.min(sel, sugg.length - 1);
+    box.hidden = false;
+    box.innerHTML = `<div class="sg-h">${esc(SYM_NAMES[trig.sym])}</div>` + sugg.map((x, i) => `<button class="sg-i${i === sel ? ' on' : ''}" data-i="${i}">${x.icon || ''}<span>${esc(x.label)}</span>${x.k ? `<span class="k">${esc(x.k)}</span>` : ''}</button>`).join('');
+    $$('.sg-i', box).forEach((b) => b.onmousedown = (e) => { e.preventDefault(); pickSugg(Number(b.dataset.i)); });
+  };
+  const pickSugg = (i) => {
+    const x = sugg[i]; if (!x || !trig) return;
+    const pos = inp.selectionStart, end = trig.sym === '{' ? (inp.value.indexOf('}', pos) >= 0 ? inp.value.indexOf('}', pos) + 1 : pos) : pos;
+    inp.value = (inp.value.slice(0, trig.start) + ' ' + inp.value.slice(end)).replace(/\s+/g, ' ').replace(/^\s/, '');
+    const s = trig.sym;
+    if (s === '#') { st.project_id = x.v; st.section = null; st.set.project_id = st.set.section = true; }
+    if (s === '/') { st.section = x.v; st.set.section = true; }
+    if (s === '@' || s === '%') { if (!st.contexts.includes(x.v)) st.contexts.push(x.v); }
+    if (s === '+') { st.assignee = x.v; st.set.assignee = true; }
+    if (s === '{') { st.deadline = x.v; st.set.deadline = true; }
+    const caret = Math.min(trig.start, inp.value.length);
+    expanded = true; sel = 0; trig = null; $('#qa-sug', sh).hidden = true;
+    inp.setSelectionRange(caret, caret);
+    autoGrow(inp); drawOpts(); inp.focus();
+  };
   drawOpts();
   inp.oninput = () => {
-    const m = inp.value.slice(0, inp.selectionStart).match(/([#@])([\p{L}\d_-]*)$/u), sg = $('#qa-sug', sh);
-    if (!m) { sg.innerHTML = ''; return; }
-    const list = m[1] === '#' ? activeProjects().map((p) => p.name) : contexts();
-    const f = list.filter((x) => norm(x).startsWith(norm(m[2]))).slice(0, 6);
-    sg.innerHTML = f.map((x) => `<button data-v="${esc(x)}">${m[1]}${esc(x)}</button>`).join('');
-    $$('button', sg).forEach((b) => b.onclick = () => {
-      const v = b.dataset.v, pos = inp.selectionStart, before = inp.value.slice(0, pos).replace(/([#@])([\p{L}\d_-]*)$/u, ''), after = inp.value.slice(pos);
-      if (m[1] === '#') { st.project_id = (activeProjects().find((p) => p.name === v) || {}).id || null; } else if (!st.contexts.includes(v)) st.contexts.push(v);
-      inp.value = (before + after).replace(/\s+/g, ' ').trimStart(); sg.innerHTML = ''; expanded = true; drawOpts(); inp.focus();
-    });
+    if (/\n/.test(inp.value)) inp.value = inp.value.replace(/\s*\n\s*/g, ' '); // pegar varias líneas → una sola
+    autoGrow(inp); sel = 0; drawSugg(); drawOpts();
   };
+  inp.onclick = () => drawSugg();
   $('#qa-file', sh).onchange = async (e) => { for (const f of e.target.files) { try { st.photos.push(await compressImage(f)); } catch (err) { toast('No se pudo leer la foto', null, null, true); } } drawPhotos(); };
-  $('#qa-cancel', sh).onclick = closeSheet;
+  $('#qa-cancel', sh).onclick = () => closeSheet();
   const add = () => {
     const raw = inp.value.trim(); if (!raw) { inp.focus(); return; }
-    const p = parseQuick(raw);
+    const m = merged(), pid = m.project_id;
     const row = {
-      id: uid(), user_id: ME, project_id: p.project_id || st.project_id, section: (p.project_id && p.project_id !== st.project_id) ? null : st.section,
-      assignee_id: null, status: 'open', priority: p.priority || st.priority, title: p.title || raw, notes: '',
-      start_date: null, due_date: p.due_date || st.due_date, due_time: p.due_time, deadline: st.deadline, recur: null, reminder: null,
-      contexts: [...new Set([...st.contexts, ...p.contexts])], energy: null, estimate: null, waiting_for: null, waiting_since: null,
+      id: uid(), user_id: ME, project_id: pid, section: pid ? m.section : null,
+      assignee_id: pid && membersOf(pid).some((x) => x.user_id === m.assignee) ? m.assignee : null,
+      status: 'open', priority: m.priority || 4, title: (m.p.title || raw).slice(0, 500), notes: '',
+      start_date: null, due_date: m.due_date, due_time: m.due_date ? m.due_time : null, deadline: m.deadline, recur: null, reminder: null,
+      contexts: m.contexts, energy: null, estimate: null, waiting_for: null, waiting_since: null,
       subtasks: [], photos: [], created_on: today(), completed_at: null, completed_by: null, focus_min: 0, source: 'app', needs_parse: false,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     };
     row.inbox = !row.project_id && !row.due_date;
     ins('tasks', row);
     for (const b of st.photos) addPhoto(row.id, b);
+    FOCUS = row.id;
     closeSheet(); render();
     const where = row.project_id ? PJ(row.project_id).name : row.inbox ? 'Bandeja' : fmtDate(row.due_date);
-    toast('Añadida a ' + where, 'Abrir', () => openTask(row.id));
+    toast('Añadida a ' + where + (wide() ? ' · T fecha · V proyecto · Y prioridad' : ''), 'Abrir', () => openTask(row.id));
   };
   $('#qa-add', sh).onclick = add;
-  inp.onkeydown = (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); add(); } if (e.key === 'Escape') closeSheet(); };
+  inp.onkeydown = (e) => {
+    const box = $('#qa-sug', sh), open = !box.hidden && sugg.length;
+    if (open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); sel = (sel + (e.key === 'ArrowDown' ? 1 : sugg.length - 1)) % sugg.length; drawSugg(); return; }
+    if (open && (e.key === 'Enter' || e.key === 'Tab') && !e.isComposing) { e.preventDefault(); pickSugg(sel); return; }
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); add(); return; }
+    if (e.key === 'Escape') { e.preventDefault(); if (open) { box.hidden = true; sugg = []; } else closeSheet(); }
+  };
   inp.focus(); setTimeout(() => inp.focus(), 60);
 }
+function pickAssignee(pid, cur, cb, kb) {
+  if (!pid || membersOf(pid).length < 2) { toast('Solo se puede asignar en proyectos compartidos'); return; }
+  openPop({ title: 'Asignar a', kb, items: [{ label: 'Nadie', v: null, icon: I.close, sel: !cur }, ...membersOf(pid).map((m) => ({ label: m.user_id === ME ? 'Yo' : m.display_name || 'Miembro', v: m.user_id, icon: I.user, sel: cur === m.user_id }))], onPick: (it) => cb(it.v) });
+}
+// Las cajas de texto crecen con su contenido para que siempre se lea todo
+function autoGrow(el) { if (!el) return; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }
+document.addEventListener('input', (e) => { if (e.target && e.target.matches && e.target.matches('textarea.grow')) autoGrow(e.target); });
 
 /* ---------- Detalle de tarea ---------- */
 function openTask(id) {
@@ -885,8 +1045,8 @@ function openTask(id) {
     const sh = $('#sheet');
     sh.innerHTML = `<div class="sheet-grab"></div><div class="sheet-head"><button class="check p${t.priority}${t.status === 'done' ? ' on' : ''}" id="td-check"></button><span class="grow" style="flex:1;color:var(--ink3);font-size:13px;padding-left:4px">${p ? `<i class="pdot" style="background:${esc(p.color)};display:inline-block"></i> ${esc(p.name)}` : t.inbox ? 'Bandeja' : 'Sin proyecto'}</span><button class="icon-btn" id="td-menu">${I.dots}</button><button class="icon-btn" id="td-close">${I.close}</button></div>
     <div class="sheet-body">
-      <textarea class="d-title" id="td-title" rows="1">${esc(t.title)}</textarea>
-      <textarea class="d-notes" id="td-notes" rows="1" placeholder="Notas">${esc(t.notes || '')}</textarea>
+      <textarea class="d-title grow" id="td-title" rows="1">${esc(t.title)}</textarea>
+      <textarea class="d-notes grow" id="td-notes" rows="1" placeholder="Notas">${esc(t.notes || '')}</textarea>
       <div class="card" style="padding:0 12px">
         <div class="kv"><span class="k">${I.mount.replace('<svg', '<svg class="ic"')}</span><span class="lab">Proyecto</span><span class="grow"><button class="v" data-pick="project">${p ? esc(p.name) : '<span class="ph">Bandeja</span>'}</button></span></div>
         ${p && (p.sections || []).length ? `<div class="kv"><span class="k">${I.sub}</span><span class="lab">Sección</span><span class="grow">${sel('section', p.sections, t.section, 'Sin sección')}</span></div>` : ''}
@@ -906,19 +1066,19 @@ function openTask(id) {
         <div class="kv"><span class="k">${I.flag}</span><span class="lab">Energía</span><span class="grow">${sel('energy', ['baja', 'media', 'alta'], t.energy, '—')}</span></div>
       </details>
       <div class="seclabel">Subtareas</div>
-      <div class="card" style="padding:4px 12px" id="td-subs">${(t.subtasks || []).map((s, i) => `<div class="subtask"><button class="check${s.done ? ' on' : ''}" data-si="${i}"></button><input type="text" value="${esc(s.t)}" data-st="${i}"><button class="x" data-sx="${i}">✕</button></div>`).join('')}<div class="subtask"><span class="check" style="border-style:dashed"></span><input type="text" id="td-newsub" placeholder="Añadir subtarea"></div></div>
+      <div class="card" style="padding:4px 12px" id="td-subs">${(t.subtasks || []).map((s, i) => `<div class="subtask"><button class="check${s.done ? ' on' : ''}" data-si="${i}"></button><textarea class="grow" rows="1" data-st="${i}">${esc(s.t)}</textarea><button class="x" data-sx="${i}">✕</button></div>`).join('')}<div class="subtask"><span class="check" style="border-style:dashed"></span><textarea class="grow" rows="1" id="td-newsub" placeholder="Añadir subtarea"></textarea></div></div>
       <div class="seclabel">Fotos</div>
       <div class="photos" id="td-photos">${(t.photos || []).map((ph, i) => `<div class="photo" data-ph="${i}"><img alt="" data-src="${esc(ph.id)}"><button class="rm" data-rm="${i}">✕</button></div>`).join('')}<label class="photo add">${I.cam.replace('class="ic"', '')}<input type="file" accept="image/*" multiple hidden id="td-file"></label></div>
       <div class="hint">Creada ${esc(fmtDate(t.created_on || localDay(t.created_at)).toLowerCase())}${t.user_id !== ME ? ' por ' + esc(personName(t.user_id)) : ''}${t.focus_min ? ` · ${t.focus_min} min de enfoque` : ''}${t.source === 'claude' ? ' · desde Claude' : t.source === 'atajo' ? ' · desde atajo' : ''}</div>
     </div>`;
     const save = (patch) => { upd('tasks', id, patch); render(); };
-    const auto = (el) => { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; };
-    const ti = $('#td-title', sh), no = $('#td-notes', sh); auto(ti); auto(no);
-    ti.oninput = () => auto(ti); no.oninput = () => auto(no);
+    const ti = $('#td-title', sh), no = $('#td-notes', sh);
+    $$('textarea.grow', sh).forEach(autoGrow);
+    ti.onkeydown = (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); ti.blur(); } };
     ti.onchange = () => { const v = ti.value.trim(); if (v) save({ title: v.slice(0, 500) }); else ti.value = t.title; };
     no.onchange = () => save({ notes: no.value });
     $('#td-check', sh).onclick = () => toggleDone(id);
-    $('#td-close', sh).onclick = closeSheet;
+    $('#td-close', sh).onclick = () => closeSheet();
     $('#td-menu', sh).onclick = () => openPop({ title: 'Tarea', items: [{ label: 'Duplicar', v: 'dup' }, ...(t.project_id || !t.inbox ? [{ label: 'Devolver a la bandeja', v: 'inbox' }] : []), ...(PJ(t.project_id) || t.user_id === ME ? [{ label: 'Eliminar', v: 'del' }] : [])], onPick: (it) => {
       if (it.v === 'dup') { const c = Object.assign({}, t, { id: uid(), user_id: ME, title: t.title, status: 'open', completed_at: null, completed_by: null, photos: [], created_at: new Date().toISOString(), created_on: today() }); ins('tasks', c); render(); openTask(c.id); }
       if (it.v === 'inbox') save({ project_id: null, section: null, inbox: true, assignee_id: null });
@@ -942,16 +1102,18 @@ function openTask(id) {
     });
     const subs = () => (S.tasks.find((x) => x.id === id).subtasks || []).map((s) => Object.assign({}, s));
     $$('[data-si]', sh).forEach((b) => b.onclick = () => { const s = subs(); s[b.dataset.si].done = !s[b.dataset.si].done; save({ subtasks: s }); draw(); });
+    $$('[data-st]', sh).forEach((i) => i.onkeydown = (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); i.blur(); } });
     $$('[data-st]', sh).forEach((i) => i.onchange = () => { const s = subs(); if (i.value.trim()) s[i.dataset.st].t = i.value.trim(); else s.splice(i.dataset.st, 1); save({ subtasks: s }); draw(); });
     $$('[data-sx]', sh).forEach((b) => b.onclick = () => { const s = subs(); s.splice(b.dataset.sx, 1); save({ subtasks: s }); draw(); });
-    const ns = $('#td-newsub', sh); ns.onkeydown = (e) => { if (e.key === 'Enter' && ns.value.trim()) { const s = subs(); s.push({ t: ns.value.trim(), done: false }); save({ subtasks: s }); draw(); setTimeout(() => $('#td-newsub') && $('#td-newsub').focus(), 30); } };
+    const ns = $('#td-newsub', sh); ns.onkeydown = (e) => { if (e.key === 'Enter' && !e.isComposing) e.preventDefault(); if (e.key === 'Enter' && !e.isComposing && ns.value.trim()) { const s = subs(); s.push({ t: ns.value.trim(), done: false }); save({ subtasks: s }); draw(); setTimeout(() => $('#td-newsub') && $('#td-newsub').focus(), 30); } };
     ns.onblur = () => { if (ns.value.trim()) { const s = subs(); s.push({ t: ns.value.trim(), done: false }); save({ subtasks: s }); draw(); } };
     $('#td-file', sh).onchange = async (e) => { for (const f of e.target.files) { try { addPhoto(id, await compressImage(f)); } catch (_) { toast('No se pudo leer la foto', null, null, true); } } draw(); };
     $$('[data-rm]', sh).forEach((b) => b.onclick = (e) => { e.stopPropagation(); if (confirm('¿Quitar esta foto?')) { removePhoto(id, Number(b.dataset.rm)); draw(); } });
     $$('[data-ph]', sh).forEach((d) => d.onclick = () => { const img = $('img', d); if (img && img.src) lightbox(img.src); });
     $$('img[data-src]', sh).forEach(async (img) => { const ph = (t.photos || []).find((x) => x.id === img.dataset.src); const u = ph && await photoURL(ph); if (u) img.src = u; });
   };
-  openSheet('', { full: true, refresh: draw });
+  openSheet('', { full: true, refresh: draw, taskId: id });
+  FOCUS = id;
   draw();
 }
 
@@ -1014,7 +1176,7 @@ function openClarify() {
     const recent = activeProjects().slice(0, 12);
     sh.innerHTML = `<div class="sheet-grab"></div><div class="sheet-head"><span class="clarify-progress" style="flex:1">${done + 1} de ${list.length + done}</span><button class="icon-btn" id="cl-open" aria-label="Editar">${I.note.replace('class="ic"', '')}</button><button class="icon-btn" id="cl-x">${I.close}</button></div>
       <div class="sheet-body">
-        <textarea class="d-title" id="cl-title" rows="1">${esc(t.title)}</textarea>
+        <textarea class="d-title grow" id="cl-title" rows="1">${esc(t.title)}</textarea>
         ${t.notes ? `<div class="muted" style="font-size:14px">${esc(t.notes)}</div>` : ''}
         <div class="seclabel">Proyecto</div>
         <div class="chips" id="cl-proj"><button class="pill on" data-p="">Sin proyecto</button>${recent.map((p) => `<button class="pill" data-p="${p.id}"><i class="pdot" style="background:${esc(p.color)};display:inline-block;margin-right:5px"></i>${esc(p.name)}</button>`).join('')}</div>
@@ -1026,7 +1188,7 @@ function openClarify() {
           <button data-a="del">${I.close}<span>Eliminar</span></button>
         </div>
       </div>`;
-    const ti = $('#cl-title', sh); ti.style.height = ti.scrollHeight + 'px';
+    const ti = $('#cl-title', sh); autoGrow(ti); ti.onkeydown = (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); ti.blur(); } };
     $$('#cl-proj .pill', sh).forEach((b) => b.onclick = () => { $$('#cl-proj .pill', sh).forEach((x) => x.classList.remove('on')); b.classList.add('on'); st.project_id = b.dataset.p || null; });
     $('#cl-x', sh).onclick = closeSheet;
     $('#cl-open', sh).onclick = () => openTask(t.id);
@@ -1333,6 +1495,7 @@ function settingsView() {
       ${r('areas', '<svg viewBox="0 0 24 24"><path d="M3.5 7.5A1.5 1.5 0 0 1 5 6h4l2 2h8a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z"/></svg>', 'Áreas y contextos', `${S.areas.length} áreas · ${contexts().length} contextos`)}
       ${r('atajos', '<svg viewBox="0 0 24 24"><path d="M13 3L5 14h6l-1 7 8-11h-6z"/></svg>', 'Atajos de iPhone')}
       ${r('claude', '<svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/></svg>', 'Claude', LS.get('summit-claude-on-' + ME, false) ? 'Conectado' : '')}
+      <button class="r" data-act="shortcuts"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg><span class="grow">Atajos de teclado</span><span class="val">?</span><span class="chev">›</span></button>
       ${r('datos', '<svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/></svg>', 'Datos', Q.length ? `${Q.length} pendientes` : 'Sincronizado')}
     </div><div class="ver">Summit ${APP_VERSION}</div>`;
   }
@@ -1377,6 +1540,7 @@ function settingsView() {
   return back + (P[page] ? P[page]() : '');
 }
 Object.assign(ACT, {
+  shortcuts: () => openShortcuts(),
   stoggle: (d, el) => { const v = el.checked; if (d.k === 'sysNotif' && v && window.Notification && Notification.permission !== 'granted') Notification.requestPermission().then((p) => { if (p !== 'granted') toast('Permiso de notificaciones denegado'); }); saveSettings({ [d.k]: v }); },
   sset: (d, el) => { el.onchange = () => { const v = ['leadDays', 'reviewDay', 'capacity'].includes(d.k) ? Number(el.value) : el.value; saveSettings({ [d.k]: v }); render(); }; },
   sname: (d, el) => { el.onchange = () => { const v = el.value.trim(); if (v) upd('profiles', ME, { name: v.slice(0, 80) }); render(); }; },
@@ -1431,32 +1595,135 @@ function openBell() {
 
 /* ---------- Gestos, teclado y pantalla ---------- */
 function bindGestures() {
-  let sx = 0, sy = 0, edge = false, sheetDrag = false;
+  // drag: la hoja sigue al dedo. Hoja inferior → arrastrar hacia abajo; tarjeta superior (añadir rápido) → hacia arriba
+  let sx = 0, sy = 0, t0 = 0, edge = false, drag = null;
+  const sc = () => $('#sheet-scrim');
   document.addEventListener('touchstart', (e) => {
-    const t = e.touches[0]; sx = t.clientX; sy = t.clientY;
-    edge = sx < 24 && !$('#app').hidden && $('#sheet').hidden && $('#drawer').hidden;
-    const sh = $('#sheet'); sheetDrag = !sh.hidden && !sh.classList.contains('top') && (e.target.closest('.sheet-grab,.sheet-head') || ($('.sheet-body', sh) && $('.sheet-body', sh).scrollTop <= 0 && sh.contains(e.target) && !e.target.closest('input,textarea,select')));
+    const t = e.touches[0]; sx = t.clientX; sy = t.clientY; t0 = Date.now(); drag = null;
+    edge = sx < 24 && !$('#app').hidden && !sheetOpen() && $('#drawer').hidden;
+    const sh = $('#sheet'); if (!sheetOpen() || !sh.contains(e.target)) return;
+    const typing = e.target.closest('input,textarea,select,[contenteditable]') && document.activeElement === e.target.closest('input,textarea,select,[contenteditable]');
+    if (sh.classList.contains('top')) { if (!typing && !e.target.closest('.qa-chips,.suggest')) drag = { el: sh, up: true, active: false, off: 0 }; return; }
+    const body = $('.sheet-body', sh);
+    if (e.target.closest('.sheet-grab,.sheet-head') || (!typing && (!body || body.scrollTop <= 0))) drag = { el: sh, up: false, active: false, off: 0 };
   }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!drag) return;
+    const t = e.touches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+    if (!drag.active) {
+      if (Math.abs(dy) < 8 || Math.abs(dy) < Math.abs(dx)) return;
+      if ((drag.up && dy > 0) || (!drag.up && dy < 0)) { drag = null; return; } // es un scroll normal
+      drag.active = true; drag.el.style.transition = 'none'; sc().style.transition = 'none';
+    }
+    e.preventDefault();
+    const off = drag.up ? Math.min(0, dy) : Math.max(0, dy);
+    drag.off = off;
+    // un poco de resistencia al principio para que no se dispare con un roce
+    drag.el.style.transform = `translateY(${off}px)`;
+    sc().style.opacity = String(Math.max(0.15, 1 - Math.abs(off) / Math.max(320, drag.el.offsetHeight || 400)));
+  }, { passive: false });
   document.addEventListener('touchend', (e) => {
     const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
     if (edge && dx > 60 && Math.abs(dy) < 50) openDrawer();
     if (!$('#drawer').hidden && dx < -60 && Math.abs(dy) < 50) closeDrawer();
-    if (sheetDrag && dy > 90 && Math.abs(dx) < 60) closeSheet();
-    edge = sheetDrag = false;
+    if (drag && drag.active) {
+      const d = drag, h = d.el.offsetHeight || 400, v = Math.abs(d.off) / Math.max(1, Date.now() - t0);
+      if (Math.abs(d.off) > Math.min(140, h * 0.3) || v > 0.55) {
+        d.el.style.transition = 'transform .2s cubic-bezier(.4,0,1,1)'; sc().style.transition = 'opacity .2s'; sc().style.opacity = '0';
+        d.el.style.transform = d.up ? 'translateY(calc(-100% - 24px))' : 'translateY(100%)';
+        if (navigator.vibrate) navigator.vibrate(8);
+        setTimeout(() => closeSheet(true), 190);
+      } else {
+        d.el.style.transition = 'transform .25s cubic-bezier(.2,.9,.3,1.2)'; sc().style.transition = 'opacity .25s';
+        d.el.style.transform = ''; sc().style.opacity = '';
+      }
+    }
+    edge = false; drag = null;
   }, { passive: true });
 }
+/* ---------- Atajos de teclado (los mismos que en Todoist) ---------- */
+const hoverOk = () => !!(window.matchMedia && matchMedia('(hover: hover) and (pointer: fine)').matches);
+function setFocus(id, scroll = true) {
+  FOCUS = id;
+  $$('#view .task.focused').forEach((r) => r.classList.remove('focused'));
+  const r = id && $(`#view .task[data-task="${id}"]`);
+  if (r) { r.classList.add('focused'); if (scroll && r.scrollIntoView) r.scrollIntoView({ block: 'nearest' }); }
+}
+function moveFocus(step) {
+  const rows = $$('#view .task'); if (!rows.length) return;
+  let i = rows.findIndex((r) => r.dataset.task === FOCUS);
+  i = i < 0 ? (step > 0 ? 0 : rows.length - 1) : Math.max(0, Math.min(rows.length - 1, i + step));
+  setFocus(rows[i].dataset.task);
+}
+// Acciones sobre una tarea (la abierta o la seleccionada). Devuelve true si la tecla se ha usado
+function taskKey(e, id) {
+  const t = S.tasks.find((x) => x.id === id); if (!t) return false;
+  const k = e.key, K = k.toLowerCase(), sh = e.shiftKey, mod = e.metaKey || e.ctrlKey;
+  const save = (patch) => { upd('tasks', id, patch); render(); refreshSheet(); };
+  if (mod && (k === 'Backspace' || k === 'Delete') || (sh && k === 'Delete')) {
+    if (t.user_id !== ME && !isOwner(t.project_id)) { toast('Solo puede eliminarla quien la creó'); }
+    else if (confirm('¿Eliminar esta tarea?')) { for (const ph of t.photos || []) mut({ k: 'unphoto', path: ph.path }); del('tasks', id); if (sheetCtx && sheetCtx.taskId === id) closeSheet(); render(); toast('Tarea eliminada'); }
+  } else if (mod) return false;
+  else if (!sh && K === 't') pickDate('Fecha', t.due_date, (v) => save({ due_date: v, due_time: v ? t.due_time : null, inbox: v ? false : (!t.project_id && t.inbox) }));
+  else if (sh && K === 't') { save({ due_date: null, due_time: null }); toast('Fecha quitada'); }
+  else if (sh && K === 'd') pickDate('Fecha límite', t.deadline, (v) => save({ deadline: v }));
+  else if (!sh && K === 'v') pickProject(t.project_id, (v) => save({ project_id: v, section: null, inbox: !v && !t.due_date, assignee_id: null }));
+  else if (!sh && K === 'y') pickPriority(t.priority, (v) => save({ priority: v }));
+  else if (!sh && ['1', '2', '3', '4'].includes(k)) save({ priority: Number(k) });
+  else if (!sh && K === 'l') pickContexts(t.contexts, (v) => save({ contexts: v }));
+  else if (sh && K === 'r') pickAssignee(t.project_id, t.assignee_id, (v) => save({ assignee_id: v }));
+  else if (!sh && K === 'e') toggleDone(id);
+  else if (!sh && k === 'Enter') { if (!(sheetCtx && sheetCtx.taskId === id)) openTask(id); }
+  else return false;
+  e.preventDefault(); return true;
+}
+let gPrefix = 0, oPrefix = 0;
 function bindKeys() {
   document.addEventListener('keydown', (e) => {
-    if (e.target.closest && e.target.closest('input,textarea,select')) return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.key === 'Escape') { if (!$('#pop').hidden) closePop(); else if (!$('#overlay').hidden) closeOverlay(); else if (!$('#sheet').hidden) closeSheet(); else closeDrawer(); return; }
-    if (!$('#sheet').hidden || !$('#overlay').hidden) return;
-    const k = e.key.toLowerCase();
-    if (k === 'q' || k === 'n') { e.preventDefault(); openQuick(); }
-    else if (k === '/') { e.preventDefault(); openSearch(); }
-    else if (k === '1') go({ name: 'inbox' }); else if (k === '2') go({ name: 'projects' }); else if (k === '3') go({ name: 'focus' });
-    else if (k === 'h') go({ name: 'today' }); else if (k === 'p') go({ name: 'next' }); else if (k === 'e') go({ name: 'stats' });
+    if (popKey(e)) return;
+    const k = e.key, K = k.toLowerCase(), mod = e.metaKey || e.ctrlKey;
+    // Ctrl/Cmd + K: buscar (como Quick Find de Todoist)
+    if (mod && K === 'k') { e.preventDefault(); openSearch(); return; }
+    // Detalle abierto: Ctrl/Cmd + Enter guarda y cierra
+    if (mod && k === 'Enter' && sheetCtx && sheetCtx.taskId) { e.preventDefault(); if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); closeSheet(); return; }
+    if (e.target.closest && e.target.closest('input,textarea,select,[contenteditable]')) return;
+    if (e.altKey) return;
+    if (k === 'Escape') { if (!$('#overlay').hidden) closeOverlay(); else if (sheetOpen()) closeSheet(); else if (!$('#drawer').hidden && !pinnedNow()) closeDrawer(); else setFocus(null); return; }
+    if (!$('#overlay').hidden) return;
+    // Con una tarea abierta, las teclas actúan sobre ella
+    if (sheetOpen()) { if (sheetCtx && sheetCtx.taskId) taskKey(e, sheetCtx.taskId); return; }
+    if ($('#app').hidden) return;
+    const now = Date.now();
+    if (now - gPrefix < 1200 && !mod) {
+      gPrefix = 0;
+      const dest = { i: { name: 'inbox' }, t: { name: 'today' }, u: { name: 'upcoming' }, p: { name: 'projects' }, a: { name: 'stats' }, f: { name: 'focus' }, c: { name: 'calendar' }, r: { name: 'review' }, w: { name: 'waiting' }, n: { name: 'next' } }[K];
+      if (dest) { e.preventDefault(); go(dest); } return;
+    }
+    if (now - oPrefix < 1200 && !mod) { oPrefix = 0; if (K === 's') { e.preventDefault(); go({ name: 'settings' }); } else if (K === 't') { e.preventDefault(); const th = (settings().theme || 'system') === 'dark' ? 'light' : 'dark'; saveSettings({ theme: th }); applyTheme(th); render(); } return; }
+    if (mod) return;
+    // Tarea seleccionada (o la última creada): T, V, Y, L, 1–4, E, Enter…
+    if (FOCUS && S.tasks.some((x) => x.id === FOCUS) && taskKey(e, FOCUS)) return;
+    if (K === 'j' || k === 'ArrowDown') { e.preventDefault(); moveFocus(1); }
+    else if (K === 'k' || k === 'ArrowUp') { e.preventDefault(); moveFocus(-1); }
+    else if (K === 'q' || K === 'a') { e.preventDefault(); openQuick(); }
+    else if (K === 'm') { e.preventDefault(); toggleSidebar(); }
+    else if (k === '/' || K === 'f') { e.preventDefault(); openSearch(); }
+    else if (k === '?') { e.preventDefault(); openShortcuts(); }
+    else if (K === 'h') { e.preventDefault(); go({ name: 'today' }); }
+    else if (K === 'g' && !e.shiftKey) gPrefix = now;
+    else if (K === 'o' && !e.shiftKey) oPrefix = now;
   });
+}
+const SHORTCUTS = [
+  ['Crear tareas', [['Q / A', 'Añadir tarea'], ['#', 'Proyecto (al escribir)'], ['/', 'Sección'], ['@ o %', 'Contexto'], ['+', 'Asignar a alguien (proyecto compartido)'], ['p1 – p4', 'Prioridad'], ['mañana 10:00', 'Fecha y hora en lenguaje natural'], ['{viernes}', 'Fecha límite'], ['Enter', 'Guardar la tarea'], ['↑ ↓ y Tab', 'Elegir una sugerencia']]],
+  ['Tarea seleccionada o abierta', [['T', 'Poner fecha'], ['Shift + T', 'Quitar la fecha'], ['Shift + D', 'Fecha límite (propio de Summit)'], ['V', 'Mover a proyecto'], ['Y', 'Cambiar prioridad'], ['1 – 4', 'Prioridad directa'], ['L', 'Contextos'], ['Shift + R', 'Asignar'], ['E', 'Completar'], ['Enter', 'Abrir la tarea'], ['Ctrl/⌘ + Enter', 'Guardar y cerrar'], ['Ctrl/⌘ + Supr', 'Eliminar'], ['Esc', 'Cerrar']]],
+  ['Navegación', [['J / K o ↑ ↓', 'Moverse entre tareas'], ['M', 'Mostrar, ocultar o fijar el menú'], ['/ · F · Ctrl/⌘ + K', 'Buscar'], ['H o G → T', 'Hoy'], ['G → I', 'Bandeja de entrada'], ['G → U', 'Próximos'], ['G → P', 'Proyectos'], ['G → A', 'Estadísticas'], ['G → F', 'Enfoque'], ['O → S', 'Ajustes'], ['O → T', 'Cambiar tema'], ['?', 'Esta ayuda']]],
+];
+function openShortcuts() {
+  const o = openOverlay(`<div class="head"><b>Atajos de teclado</b><button class="icon-btn" id="sc-x">${I.close}</button></div>
+    <div class="list sc-list">${SHORTCUTS.map(([h, l]) => `<div class="seclabel" style="padding:8px 4px 4px">${esc(h)}</div>${l.map(([key, d]) => `<div class="sc-row"><span>${esc(d)}</span><span class="keys">${key.split(/(\s(?:\/|o|\+|→|·|–)\s)/).map((p, i) => (i % 2 ? `<i>${esc(p.trim())}</i>` : `<kbd>${esc(p)}</kbd>`)).join('')}</span></div>`).join('')}`).join('')}
+    <p class="hint" style="padding:8px 4px 4px">Son los mismos atajos que Todoist. Al escribir una tarea se usan los símbolos; con la tarea ya creada o seleccionada, las teclas.</p></div>`);
+  $('#sc-x', o).onclick = closeOverlay;
 }
 function bindViewport() {
   const vv = window.visualViewport; if (!vv) return;
