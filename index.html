@@ -12,7 +12,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
-<link rel="stylesheet" href="styles.css?v=1.4.1">
+<link rel="stylesheet" href="styles.css?v=1.5.0">
 </head>
 <body>
 <div id="splash"><svg viewBox="0 0 64 64" class="logo splash-logo"><rect width="64" height="64" rx="15" fill="#F4F2EC"/><path d="M12 44 L24.5 28 L31 36 L40 23 L52 44" fill="none" stroke="#5F7F6A" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" pathLength="1"/></svg></div>
@@ -23,7 +23,7 @@
   <header class="topbar">
     <button class="icon-btn" id="btn-menu" aria-label="Menú"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg></button>
     <span class="grow"></span>
-    <span id="offline-pill" hidden>sin conexión</span>
+    <button id="offline-pill" hidden aria-live="polite">sin conexión</button>
     <button class="icon-btn" id="btn-stats" aria-label="Estadísticas"><svg viewBox="0 0 24 24"><path d="M4 20h16M7 17V10M12 17V5M17 17v-4"/></svg></button>
     <button class="icon-btn" id="btn-search" aria-label="Buscar"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg></button>
     <button class="icon-btn" id="btn-bell" aria-label="Avisos"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></svg><i class="dot" id="bell-dot" hidden></i></button>
@@ -46,7 +46,7 @@
 <div id="toast" hidden></div>
 
 <script src="supabase.min.js"></script>
-<script src="config.js?v=1.4.1"></script>
-<script src="app.js?v=1.4.1"></script>
+<script src="config.js?v=1.5.0"></script>
+<script src="app.js?v=1.5.0"></script>
 </body>
 </html>

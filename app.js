@@ -1,8 +1,8 @@
-/* Summit 1.3.0 · gestor de tareas GTD
+/* Summit 1.5.0 · gestor de tareas GTD
    PWA sin dependencias de compilación. Datos en Supabase (esquema `summit`), con caché local
    y cola de cambios para funcionar sin conexión. */
 'use strict';
-const APP_VERSION = '1.4.1';
+const APP_VERSION = '1.5.0';
 const CFG = window.SUMMIT_CONFIG || {};
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -90,32 +90,69 @@ function nextRecur(rule, d) {
 /* ---------- Almacenamiento local ---------- */
 const LS = {
   get(k, def) { try { const v = localStorage.getItem(k); return v == null ? def : JSON.parse(v); } catch (_) { return def; } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) { /* lleno o bloqueado */ } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (_) { return false; } },
   del(k) { try { localStorage.removeItem(k); } catch (_) { /* nada */ } },
 };
 const saveCache = () => ME && LS.set('summit-cache-' + ME, S);
 const loadCache = () => { const c = ME && LS.get('summit-cache-' + ME, null); if (c && c.profile) { S = Object.assign({ profile: null, areas: [], projects: [], members: [], tasks: [], focus: [] }, c); return true; } return false; };
-const saveQ = () => ME && LS.set('summit-queue-' + ME, Q);
 
-// Fotos en IndexedDB (para verlas y subirlas sin conexión)
+// Fotos y copia de seguridad de la cola en IndexedDB
 const IDB = (() => {
   let dbp = null;
   const open = () => dbp || (dbp = new Promise((res, rej) => {
     if (!window.indexedDB) return rej(new Error('sin IndexedDB'));
-    const r = indexedDB.open('summit', 1);
-    r.onupgradeneeded = () => r.result.createObjectStore('photos');
+    const r = indexedDB.open('summit', 2);
+    r.onupgradeneeded = () => { const db = r.result; for (const s of ['photos', 'meta']) if (!db.objectStoreNames.contains(s)) db.createObjectStore(s); };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   }));
-  const tx = (mode, fn) => open().then((db) => new Promise((res, rej) => { const t = db.transaction('photos', mode); const st = t.objectStore('photos'); const out = fn(st); t.oncomplete = () => res(out && out.result); t.onerror = () => rej(t.error); }));
+  const tx = (store, mode, fn) => open().then((db) => new Promise((res, rej) => { const t = db.transaction(store, mode); const st = t.objectStore(store); const out = fn(st); t.oncomplete = () => res(out && out.result); t.onerror = () => rej(t.error); }));
   return {
-    put: (k, v) => tx('readwrite', (s) => s.put(v, k)).catch(() => null),
-    get: (k) => tx('readonly', (s) => s.get(k)).catch(() => null),
-    del: (k) => tx('readwrite', (s) => s.delete(k)).catch(() => null),
+    put: (k, v, store = 'photos') => tx(store, 'readwrite', (s) => s.put(v, k)).catch(() => null),
+    get: (k, store = 'photos') => tx(store, 'readonly', (s) => s.get(k)).catch(() => null),
+    del: (k, store = 'photos') => tx(store, 'readwrite', (s) => s.delete(k)).catch(() => null),
   };
 })();
 
+/* ---------- Cola de cambios (sin conexión) ----------
+   Cada cambio se aplica en local al instante y se guarda en una cola persistente
+   (localStorage + copia en IndexedDB). La cola se lee siempre del almacenamiento, así
+   varias pestañas del mismo dispositivo no se pisan, y se envía en orden al volver la red.
+   Los identificadores se generan en el dispositivo, de modo que las tareas creadas sin
+   conexión en dos dispositivos distintos nunca chocan: al sincronizar se suman todas. */
+const QKEY = () => 'summit-queue-' + ME;
+const qRead = () => (ME ? LS.get(QKEY(), []) : []);
+function qWrite(q) {
+  if (!ME) return;
+  Q = q;
+  if (!LS.set(QKEY(), q)) { LS.del('summit-cache-' + ME); LS.set(QKEY(), q); } // si no cabe, la cola manda sobre la caché
+  LS.set('summit-qstamp-' + ME, Date.now());
+  IDB.put('queue-' + ME, q, 'meta');
+}
+async function qLoad() {
+  let q = qRead();
+  // Si el sistema borró el almacenamiento local, se recupera la copia de IndexedDB
+  if (!q.length && LS.get('summit-qstamp-' + ME, null) == null) {
+    const b = await IDB.get('queue-' + ME, 'meta');
+    if (Array.isArray(b) && b.length) q = b;
+  }
+  let fix = false;
+  for (const op of q) if (!op.i) { op.i = uid(); fix = true; }
+  if (fix || q.length) qWrite(q); else Q = q;
+  return q;
+}
+
 /* ---------- Cambios: se aplican en local y se encolan ---------- */
 function tableArr(t) { return { tasks: S.tasks, projects: S.projects, areas: S.areas, focus_sessions: S.focus, project_members: S.members }[t]; }
+// Secciones: se guardan como cambios sueltos (añadir, renombrar, mover, borrar) para que
+// dos dispositivos que editan secciones sin conexión no se sobrescriban entre sí.
+function applySec(list, op) {
+  const l = (list || []).slice();
+  if (op.a === 'add') { if (!l.includes(op.s)) { const at = op.after != null ? l.indexOf(op.after) : -1; if (op.first) l.unshift(op.s); else if (at >= 0) l.splice(at + 1, 0, op.s); else l.push(op.s); } }
+  else if (op.a === 'ren') { const i = l.indexOf(op.s); if (i >= 0) { if (l.includes(op.n)) l.splice(i, 1); else l[i] = op.n; } }
+  else if (op.a === 'del') return l.filter((x) => x !== op.s);
+  else if (op.a === 'move') { const i = l.indexOf(op.s), j = i + (op.dir < 0 ? -1 : 1); if (i >= 0 && j >= 0 && j < l.length) [l[i], l[j]] = [l[j], l[i]]; }
+  return l;
+}
 function applyLocal(op) {
   if (op.k === 'ins') {
     const arr = tableArr(op.t); if (!arr) return;
@@ -124,51 +161,102 @@ function applyLocal(op) {
   } else if (op.k === 'upd') {
     if (op.t === 'profiles') { if (S.profile) Object.assign(S.profile, op.patch); return; }
     const x = (tableArr(op.t) || []).find((r) => r.id === op.id); if (x) Object.assign(x, op.patch);
+  } else if (op.k === 'set') {
+    if (S.profile) S.profile.settings = Object.assign({}, S.profile.settings || {}, op.patch);
+  } else if (op.k === 'sec') {
+    const p = S.projects.find((r) => r.id === op.id); if (p) p.sections = applySec(p.sections, op);
   } else if (op.k === 'del') {
     const arr = tableArr(op.t); if (!arr) return;
     const i = arr.findIndex((r) => r.id === op.id); if (i >= 0) arr.splice(i, 1);
     if (op.t === 'projects') { S.tasks = S.tasks.filter((t) => t.project_id !== op.id); S.members = S.members.filter((m) => m.project_id !== op.id); }
   }
 }
-function mut(op) { applyLocal(op); Q.push(op); saveQ(); saveCache(); flush(); }
+function mut(op) { op.i = op.i || uid(); applyLocal(op); const q = qRead(); q.push(op); qWrite(q); saveCache(); updatePill(); flush(); }
 const ins = (t, row) => mut({ k: 'ins', t, row });
 const upd = (t, id, patch) => mut({ k: 'upd', t, id, patch: Object.assign({}, patch, ['tasks', 'projects', 'profiles'].includes(t) ? { updated_at: new Date().toISOString() } : {}) });
 const del = (t, id) => mut({ k: 'del', t, id });
+const secOp = (id, a, extra = {}) => mut(Object.assign({ k: 'sec', id, a }, extra));
 
-const isNetErr = (e) => { const m = String((e && (e.message || e)) || ''); return !navigator.onLine || /fetch|network|load failed|timeout|ERR_/i.test(m); };
+const isNetErr = (e) => { const m = String((e && (e.message || e.name || e)) || ''); return !navigator.onLine || /fetch|network|load failed|timeout|timed out|abort|ERR_|connection/i.test(m); };
 const isAuthErr = (e) => e && (e.status === 401 || e.code === 'PGRST301' || /JWT|jwt expired|not authenticated/i.test(String(e.message || '')));
+
+// Peticiones con tiempo máximo: con una conexión débil la petición no se queda colgada
+// y el cambio sigue en la cola hasta el siguiente intento.
+function timedFetch(url, opts = {}) {
+  const ms = /\/storage\/v1\//.test(String(url)) ? 90000 : 25000;
+  const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), ms);
+  if (opts.signal) { if (opts.signal.aborted) ctl.abort(); else opts.signal.addEventListener('abort', () => ctl.abort(), { once: true }); }
+  return fetch(url, Object.assign({}, opts, { signal: ctl.signal })).finally(() => clearTimeout(tm));
+}
 
 async function runOp(op) {
   let r;
-  if (op.k === 'ins') r = await sb.from(op.t).upsert(op.row, { onConflict: op.t === 'project_members' ? 'project_id,user_id' : 'id' });
+  if (op.k === 'ins') r = await sb.from(op.t).upsert(op.row, { onConflict: op.t === 'project_members' ? 'project_id,user_id' : 'id', ignoreDuplicates: true });
   else if (op.k === 'upd') r = await sb.from(op.t).update(op.patch).eq('id', op.id);
   else if (op.k === 'del') r = await sb.from(op.t).delete().eq('id', op.id);
-  else if (op.k === 'photo') {
+  else if (op.k === 'set') { // ajustes: se mezclan con lo que haya en el servidor (otros dispositivos)
+    const cur = await sb.from('profiles').select('settings').eq('id', ME).maybeSingle();
+    if (cur.error) throw cur.error;
+    r = await sb.from('profiles').update({ settings: Object.assign({}, (cur.data && cur.data.settings) || {}, op.patch), updated_at: new Date().toISOString() }).eq('id', ME);
+  } else if (op.k === 'sec') {
+    const cur = await sb.from('projects').select('sections').eq('id', op.id).maybeSingle();
+    if (cur.error) throw cur.error;
+    if (!cur.data) return; // el proyecto ya no existe
+    r = await sb.from('projects').update({ sections: applySec(cur.data.sections, op), updated_at: new Date().toISOString() }).eq('id', op.id);
+  } else if (op.k === 'photo') {
     const blob = await IDB.get(op.photo);
     if (!blob) return; // ya no existe en el dispositivo
     r = await sb.storage.from('summit-fotos').upload(op.path, blob, { contentType: blob.type || 'image/jpeg', upsert: true });
   } else if (op.k === 'unphoto') r = await sb.storage.from('summit-fotos').remove([op.path]);
   if (r && r.error) throw r.error;
 }
+// Si una tarea creada sin conexión no se puede guardar en su proyecto (porque otro
+// dispositivo lo borró o te quitaron el acceso), se guarda en la Bandeja: nunca se pierde.
+function rescue(op) {
+  if (op.rescued || op.k !== 'ins' || op.t !== 'tasks' || !op.row.project_id) return null;
+  const row = Object.assign({}, op.row, { project_id: null, section: null, assignee_id: null, inbox: true, user_id: ME });
+  const x = S.tasks.find((t) => t.id === row.id); if (x) Object.assign(x, row); saveCache();
+  return Object.assign({}, op, { row, rescued: true });
+}
 async function flush() {
-  if (flushing || !sb || !ME || !Q.length) return;
+  if (flushing || !sb || !ME) return;
+  if (!qRead().length) { Q = []; updatePill(); return; }
   if (!navigator.onLine) { setOffline(true); return; }
   flushing = true;
-  try {
-    while (Q.length) {
-      try { await runOp(Q[0]); Q.shift(); saveQ(); }
+  let sent = 0;
+  const run = async () => {
+    for (;;) {
+      const q = qRead(); if (!q.length) break;
+      const op = q[0];
+      try { await runOp(op); }
       catch (e) {
-        if (isNetErr(e)) { setOffline(true); break; }
-        if (isAuthErr(e)) { const { error } = await sb.auth.refreshSession(); if (error) break; continue; }
-        console.warn('Cambio rechazado', Q[0], e);
+        if (isNetErr(e)) { setOffline(true); return; }
+        if (isAuthErr(e)) { const { error } = await sb.auth.refreshSession(); if (error) return; continue; }
+        console.warn('Cambio rechazado', op, e);
+        const alt = rescue(op);
+        if (alt) { const q2 = qRead(); const j = q2.findIndex((x) => x.i === op.i); if (j >= 0) { q2[j] = alt; qWrite(q2); } toast('Una tarea se ha guardado en la Bandeja porque su proyecto ya no está disponible.'); continue; }
         toast('No se pudo guardar un cambio: ' + (e.message || e));
-        Q.shift(); saveQ();
       }
+      qWrite(qRead().filter((x) => x.i !== op.i)); sent++; updatePill();
     }
-    if (!Q.length) setOffline(false);
-  } finally { flushing = false; }
+    setOffline(false);
+  };
+  try {
+    if (navigator.locks && navigator.locks.request) await navigator.locks.request('summit-flush-' + ME, run);
+    else await run();
+  } finally {
+    flushing = false; Q = qRead(); updatePill();
+    if (sent && !Q.length) scheduleReload(400); // trae lo que hayan subido otros dispositivos
+  }
 }
-function setOffline(v) { OFFLINE = v; const p = $('#offline-pill'); if (p) p.hidden = !v; }
+function setOffline(v) { OFFLINE = v; updatePill(); }
+function updatePill() {
+  const p = $('#offline-pill'); if (!p) return;
+  const n = ME ? qRead().length : 0;
+  p.hidden = !OFFLINE && !n;
+  p.classList.toggle('sync', !OFFLINE && !!n);
+  p.textContent = OFFLINE ? (n ? `sin conexión · ${n} sin subir` : 'sin conexión') : `subiendo ${n}`;
+}
 
 /* ---------- Arranque y sesión ---------- */
 window.addEventListener('DOMContentLoaded', start);
@@ -177,7 +265,9 @@ async function start() {
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => null);
   if (!window.supabase) return fatal('No se ha podido cargar <b>supabase.min.js</b>. Comprueba que está en la raíz del repositorio, junto a index.html.');
   if (!CFG.SUPABASE_URL || !CFG.SUPABASE_KEY) return fatal('Falta configurar <b>config.js</b> con la URL y la clave publicable de Supabase.');
-  sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: 'summit-auth' } });
+  sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: 'summit-auth' }, global: { fetch: timedFetch } });
+  // Pide al navegador que no borre los datos locales (cola sin conexión, caché y fotos)
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then((ok) => ok || navigator.storage.persist()).catch(() => null); } catch (_) { /* nada */ }
   sb.auth.onAuthStateChange((ev, session) => {
     if (ev === 'PASSWORD_RECOVERY') showAuth('reset');
     if (ev === 'SIGNED_OUT') { ME = null; showAuth('login'); }
@@ -185,14 +275,27 @@ async function start() {
   });
   window.addEventListener('online', () => { setOffline(false); flush(); scheduleReload(300); });
   window.addEventListener('offline', () => setOffline(true));
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && ME) { flush(); scheduleReload(500); } });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') { hidePrivate(); return; }
+    if (ME) { flush(); scheduleReload(500); }
+  });
+  // Otra pestaña del mismo dispositivo ha cambiado la cola
+  window.addEventListener('storage', (e) => { if (ME && e.key === QKEY()) { Q = qRead(); updatePill(); } });
+  // Reintento periódico: el aviso «online» del sistema no siempre llega cuando vuelve la red
+  setInterval(() => { if (ME && !flushing && navigator.onLine && (qRead().length || OFFLINE)) { flush(); if (OFFLINE) scheduleReload(0); } }, 30000);
   if (/error_code=otp_expired|error=access_denied/.test(location.hash)) { history.replaceState(null, '', location.pathname); return showAuth('forgot', 'El enlace ha caducado. Pide un código nuevo.'); }
 
   let session = null;
   try { session = (await sb.auth.getSession()).data.session; } catch (_) { session = null; }
   const last = LS.get('summit-last-user', null);
+  // Sin red (o con una red que no responde) la sesión no se puede renovar, pero sigue guardada:
+  // se abre la copia local y se sincroniza cuando vuelva la conexión.
+  const keptSession = !!LS.get('summit-auth', null);
   if (session && session.user) await enter(session.user);
-  else if (!navigator.onLine && last) { ME = last.id; MEMAIL = last.email; MENAME = last.name || ''; if (loadCache()) { Q = LS.get('summit-queue-' + ME, []); showApp(); setOffline(true); } else showAuth('login'); }
+  else if (last && (keptSession || !navigator.onLine)) {
+    ME = last.id; MEMAIL = last.email; MENAME = last.name || '';
+    if (loadCache()) { await qLoad(); showApp(); setOffline(true); scheduleReload(1500); } else { ME = null; showAuth('login'); }
+  }
   else showAuth('login');
   hideSplash();
 }
@@ -201,7 +304,7 @@ function fatal(html) { hideSplash(); const a = $('#auth'); a.hidden = false; $('
 
 async function enter(user) {
   ME = user.id; MEMAIL = user.email || ''; MENAME = (user.user_metadata && user.user_metadata.name) || '';
-  Q = LS.get('summit-queue-' + ME, []);
+  await qLoad();
   const cached = loadCache();
   if (cached) showApp();
   try { await loadAll(); LS.set('summit-last-user', { id: ME, email: MEMAIL, name: S.profile && S.profile.name }); if (!cached) showApp(); else render(); subscribe(); flush(); }
@@ -230,12 +333,21 @@ async function loadAll() {
   for (const r of [pr, ar, pj, mb, tk, fc]) if (r.error) throw r.error;
   S = { profile: pr.data, areas: ar.data, projects: pj.data, members: mb.data, tasks: tk.data, focus: fc.data };
   if (!settings().tz) { const z = Intl.DateTimeFormat().resolvedOptions().timeZone; if (z) S.profile.settings = Object.assign({}, settings(), { tz: z }); }
+  Q = qRead();
   for (const op of Q) applyLocal(op); // los cambios pendientes mandan sobre lo descargado
   applyTheme(settings().theme || 'system');
   parsePending();
   saveCache();
 }
-function scheduleReload(ms = 800) { clearTimeout(reloadTimer); reloadTimer = setTimeout(async () => { if (!ME || !navigator.onLine || Q.length) return; try { await loadAll(); setOffline(false); render(); } catch (e) { if (isNetErr(e)) setOffline(true); } }, ms); }
+function scheduleReload(ms = 800) {
+  clearTimeout(reloadTimer);
+  reloadTimer = setTimeout(async () => {
+    if (!ME || !navigator.onLine) return;
+    if (qRead().length) { flush(); return; } // primero se sube lo pendiente; al terminar se recarga
+    try { await loadAll(); setOffline(false); if (S.profile && S.profile.name) LS.set('summit-last-user', { id: ME, email: MEMAIL, name: S.profile.name }); render(); subscribe(); }
+    catch (e) { if (isNetErr(e) || isAuthErr(e)) setOffline(true); }
+  }, ms);
+}
 function subscribe() {
   if (channel || !sb.channel) return;
   channel = sb.channel('summit-' + ME);
@@ -346,9 +458,9 @@ function traducir(e) {
   return s;
 }
 async function signOut() {
-  if (Q.length && !confirm('Hay cambios sin sincronizar en este dispositivo. Si cierras sesión se perderán. ¿Continuar?')) return;
+  if (qRead().length && !confirm('Hay cambios sin sincronizar en este dispositivo. Si cierras sesión se perderán. ¿Continuar?')) return;
   try { await sb.auth.signOut(); } catch (_) { /* sin red */ }
-  LS.del('summit-cache-' + ME); LS.del('summit-queue-' + ME); LS.del('summit-last-user');
+  LS.del('summit-cache-' + ME); LS.del('summit-queue-' + ME); LS.del('summit-qstamp-' + ME); IDB.del('queue-' + ME, 'meta'); LS.del('summit-last-user');
   if (channel) { sb.removeChannel(channel); channel = null; }
   ME = null; S = { profile: null, areas: [], projects: [], members: [], tasks: [], focus: [] }; Q = [];
   showAuth('login');
@@ -391,7 +503,7 @@ function alerts() {
   const out = [], lead = settings().leadDays ?? 2;
   const od = S.tasks.filter((t) => overdue(t) && mine(t));
   if (od.length && settings().notifyOverdue !== false) out.push({ txt: `${od.length} ${od.length === 1 ? 'tarea vencida' : 'tareas vencidas'}`, go: { name: 'today' } });
-  for (const t of S.tasks.filter((x) => isOpen(x) && mine(x) && x.deadline && x.deadline >= today() && diffDays(x.deadline, today()) <= lead)) out.push({ txt: `Fecha límite ${fmtDate(t.deadline).toLowerCase()}: ${t.title}`, task: t.id });
+  for (const t of S.tasks.filter((x) => isOpen(x) && mine(x) && x.deadline && x.deadline >= today() && diffDays(x.deadline, today()) <= lead)) out.push({ txt: `Fecha límite ${fmtDate(t.deadline).toLowerCase()}: ${safeTitle(t)}`, task: t.id });
   if (reviewDue() && dow(today()) === (settings().reviewDay ?? 5)) out.push({ txt: 'Toca hacer la revisión semanal', go: { name: 'review' } });
   return out;
 }
@@ -407,29 +519,80 @@ function bindChrome() {
   $('#btn-search').onclick = openSearch;
   $('#btn-bell').onclick = openBell;
   $('#fab').onclick = () => openQuick();
+  $('#offline-pill').onclick = () => {
+    const n = qRead().length;
+    toast(n ? `${n} ${n === 1 ? 'cambio guardado' : 'cambios guardados'} en este dispositivo. Se subirán solos en cuanto haya conexión.` : 'Sin conexión. Puedes seguir trabajando: todo se guarda en este dispositivo.');
+    flush(); scheduleReload(0);
+  };
   $$('#tabbar button').forEach((b) => b.onclick = () => go({ name: b.dataset.view }));
   bindGestures(); bindKeys(); bindViewport();
 }
-function go(v) { VIEW = v; closeDrawer(); closeOverlay(); render(); if (FOCUS && !$(`#view .task[data-task="${FOCUS}"]`)) FOCUS = null; window.scrollTo(0, 0); }
+function go(v) { const keep = v.name === 'project' && REVEAL.has(v.id); REVEAL.clear(); if (keep) REVEAL.add(v.id); VIEW = v; closeDrawer(); closeOverlay(); render(); if (FOCUS && !$(`#view .task[data-task="${FOCUS}"]`)) FOCUS = null; window.scrollTo(0, 0); }
 function render() {
   if (!S.profile || $('#app').hidden) return;
-  setOffline(OFFLINE || Q.length > 0 && !navigator.onLine);
+  Q = qRead(); updatePill();
   const n = inboxTasks().length, bi = $('#badge-inbox');
   bi.hidden = !n; bi.textContent = n;
   $$('#tabbar button').forEach((b) => b.classList.toggle('on', b.dataset.view === VIEW.name || (b.dataset.view === 'projects' && VIEW.name === 'project')));
   $('#bell-dot').hidden = !alerts().length;
   $('#btn-stats').classList.toggle('on', VIEW.name === 'stats');
   const fn = VIEWS[VIEW.name] || VIEWS.today;
+  if (VIEW.secEdit && (VIEW.name !== 'project' || VIEW.secEdit.pid !== VIEW.id)) VIEW.secEdit = null;
+  const typing = VIEW.secEdit && $('#sec-input') ? $('#sec-input').value : null; // no perder lo escrito si llega una sincronización
   $('#view').innerHTML = fn();
   bindView();
+  if (VIEW.secEdit) { if (typing != null && $('#sec-input')) $('#sec-input').value = typing; bindSecInput(); }
   if (VIEW.name === 'focus') tickPomo();
   if (!$('#drawer').hidden) renderDrawer();
 }
 const head = (title, sub = '', extra = '') => `<div class="v-head${extra ? ' row' : ''}"><div style="flex:1;min-width:0"><h1>${esc(title)}</h1>${sub ? `<div class="v-sub">${sub}</div>` : ''}</div>${extra}</div>`;
 const longDate = (iso) => { const d = parseD(iso); return `${DIAS[d.getUTCDay()].replace(/^./, (c) => c.toUpperCase())}, ${d.getUTCDate()} de ${['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'][d.getUTCMonth()]}`; };
 
+/* ---------- Proyectos privados (tareas ocultas) ----------
+   Las tareas de un proyecto privado se muestran difuminadas en todas las vistas, como el
+   saldo oculto de una app bancaria. El texto real no llega a la pantalla: se dibuja un
+   texto de relleno borroso. Se muestran con el ojo del proyecto (o tocando una tarea
+   difuminada) y se vuelven a ocultar al cambiar de pantalla o al salir de la app. */
+const REVEAL = new Set();
+const privateIds = () => settings().privateProjects || [];
+const isPrivate = (pid) => !!pid && privateIds().includes(pid);
+const veiled = (t) => !!t && isPrivate(t.project_id) && !REVEAL.has(t.project_id);
+const safeTitle = (t) => (veiled(t) ? 'Tarea privada' : t.title);
+const EYE = '<svg viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF = '<svg viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 5.6A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-3 3.7M6.4 6.9C3.9 8.6 2.5 12 2.5 12S6 18.5 12 18.5a9 9 0 0 0 4.2-1M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+const LOCK = '<svg class="ic" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
+function veilText(id) { // relleno estable por tarea, sin relación con el título real
+  let h = 0; for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const words = 2 + (h % 4); let out = [];
+  for (let i = 0; i < words; i++) { h = (h * 1103515245 + 12345) >>> 0; out.push('x'.repeat(3 + (h % 7))); }
+  return out.join(' ');
+}
+function setPrivate(pid, on) {
+  const l = privateIds().filter((x) => x !== pid && S.projects.some((p) => p.id === x));
+  if (on) l.push(pid);
+  REVEAL.delete(pid);
+  saveSettings({ privateProjects: l });
+  toast(on ? 'Proyecto privado: sus tareas se mostrarán ocultas' : 'Las tareas del proyecto vuelven a verse siempre');
+  render();
+}
+function hidePrivate() {
+  if (!REVEAL.size) return;
+  REVEAL.clear();
+  if (sheetCtx && sheetCtx.taskId && isPrivate((S.tasks.find((t) => t.id === sheetCtx.taskId) || {}).project_id)) closeSheet(true);
+  if (S.profile && !$('#app').hidden) render();
+}
+function toggleReveal(pid) { if (REVEAL.has(pid)) REVEAL.delete(pid); else REVEAL.add(pid); render(); }
+
 /* ---------- Fila de tarea ---------- */
+function veiledRow(t, o = {}) {
+  const pj = PJ(t.project_id);
+  return `<div class="task veiled${t.status === 'done' ? ' done' : ''}" data-veil="${t.project_id}" title="Tarea oculta. Toca para mostrar">
+    <span class="check p4 veil-check" aria-hidden="true"></span>
+    <div class="t-body"><div class="t-title"><span class="veil-txt">${veilText(t.id)}</span></div><div class="t-sub"><span class="tag">${LOCK}Oculta${!o.noProject && pj ? ' · ' + esc(pj.name) : ''}</span></div></div>
+    ${!o.noProject && pj ? `<div class="t-right"><i class="pdot" style="background:${projColor(t.project_id)}"></i></div>` : ''}</div>`;
+}
 function row(t, o = {}) {
+  if (veiled(t)) return veiledRow(t, o);
   const sub = [];
   if (!o.noProject && t.project_id && PJ(t.project_id)) sub.push(`<span class="tag"><i class="pdot" style="background:${projColor(t.project_id)}"></i>${esc(PJ(t.project_id).name)}${t.section ? ' · ' + esc(t.section) : ''}</span>`);
   if (t.status === 'waiting') sub.push(`<span class="tag">${I.wait}${esc(t.waiting_for || 'En espera')}${t.waiting_since ? ' · ' + Math.max(0, diffDays(today(), t.waiting_since)) + ' d' : ''}</span>`);
@@ -464,6 +627,7 @@ function bindView() {
     r.onclick = () => openTask(r.dataset.task);
     r.onmouseenter = () => { if (hoverOk()) setFocus(r.dataset.task, false); };
   });
+  $$('[data-veil]', v).forEach((r) => r.onclick = (e) => { e.stopPropagation(); REVEAL.add(r.dataset.veil); render(); });
   $$('[data-add]', v).forEach((b) => b.onclick = () => openQuick(quickDefaults(b.dataset)));
   $$('[data-go]', v).forEach((b) => b.onclick = () => go(JSON.parse(b.dataset.go)));
   $$('[data-act]', v).forEach((b) => {
@@ -593,7 +757,7 @@ const VIEWS = {
 };
 function projRow(p) {
   const open = S.tasks.filter((t) => t.project_id === p.id && isOpen(t)).length;
-  return `<button class="r" ${goAttr({ name: 'project', id: p.id })}><i class="pdot" style="background:${esc(p.color)}"></i><span class="grow name">${esc(p.name)}${p.status !== 'active' ? ` <span class="muted">· ${p.status === 'paused' ? 'en pausa' : 'completado'}</span>` : ''}</span>${isShared(p.id) ? `<svg class="ic muted" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/></svg>` : ''}<span class="val">${open || ''}</span><span class="chev">›</span></button>`;
+  return `<button class="r" ${goAttr({ name: 'project', id: p.id })}><i class="pdot" style="background:${esc(p.color)}"></i><span class="grow name">${esc(p.name)}${isPrivate(p.id) ? ` <span class="priv-ic" title="Tareas ocultas">${LOCK}</span>` : ''}${p.status !== 'active' ? ` <span class="muted">· ${p.status === 'paused' ? 'en pausa' : 'completado'}</span>` : ''}</span>${isShared(p.id) ? `<svg class="ic muted" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/></svg>` : ''}<span class="val">${open || ''}</span><span class="chev">›</span></button>`;
 }
 const ring = (pct, color, size = 38) => `<div class="proj-ring" style="width:${size}px;height:${size}px"><svg viewBox="0 0 38 38" style="width:${size}px;height:${size}px"><circle cx="19" cy="19" r="16" stroke="var(--surface2)"/><circle cx="19" cy="19" r="16" stroke="${color}" stroke-dasharray="${(pct / 100 * 100.5).toFixed(1)} 200"/></svg><b>${Math.round(pct)}%</b></div>`;
 
@@ -601,22 +765,73 @@ function projectView() {
   const p = PJ(VIEW.id); if (!p) return head('Proyecto') + empty('Este proyecto ya no existe o te han quitado el acceso.');
   const all = S.tasks.filter((t) => t.project_id === p.id), open = all.filter(isOpen), done = all.filter((t) => !isOpen(t));
   const pct = all.length ? done.length / all.length * 100 : 0;
-  const board = VIEW.board;
-  const secs = [null, ...(p.sections || [])];
-  const bySec = (s) => open.filter((t) => (t.section || null) === s && (s || !t.section || !(p.sections || []).includes(t.section))).sort(sortTasks);
-  const orphan = open.filter((t) => t.section && !(p.sections || []).includes(t.section));
-  const secTasks = (s) => s === null ? [...bySec(null).filter((t) => !t.section), ...orphan] : open.filter((t) => t.section === s).sort(sortTasks);
+  const board = VIEW.board, own = isOwner(p.id), sections = p.sections || [];
+  const priv = isPrivate(p.id), hidden = priv && !REVEAL.has(p.id);
+  const ed = VIEW.secEdit && VIEW.secEdit.pid === p.id ? VIEW.secEdit : null;
+  const secs = [null, ...sections];
+  const orphan = open.filter((t) => t.section && !sections.includes(t.section));
+  const secTasks = (s) => s === null ? [...open.filter((t) => !t.section), ...orphan].sort(sortTasks) : open.filter((t) => t.section === s).sort(sortTasks);
   const mem = membersOf(p.id);
+  // Cabecera de sección: el nombre se toca para renombrar; ⋯ abre mover, añadir debajo y eliminar
+  const secHead = (s, n) => {
+    if (s && ed && ed.mode === 'ren' && ed.s === s) return `<div class="group-h sec-h">${secInput(s, 'Nombre de la sección')}</div>`;
+    const name = s ? (own ? `<button class="sec-name" data-act="secren" data-s="${esc(s)}" title="Renombrar">${esc(s)}</button>` : esc(s)) : esc(board ? 'Sin sección' : 'Tareas');
+    return `<div class="group-h sec-h">${name} <span class="count">${n}</span><span class="grow"></span>${s && own ? `<button class="sec-dots" data-act="secmenu" data-s="${esc(s)}" aria-label="Opciones de la sección">${I.dots}</button>` : ''}</div>`;
+  };
+  const addAfter = (s) => ed && ed.mode === 'add' && ed.after === s ? `<div class="sec-new">${secInput('', 'Nombre de la nueva sección')}</div>` : '';
+  const addSecBtn = own && !(ed && ed.mode === 'add' && ed.after === undefined) ? `<button class="sec-add" data-act="secadd"><svg class="ic" viewBox="0 0 24 24"><path d="M4 7h10M4 12h10M4 17h6M18 14v6M15 17h6"/></svg>Añadir sección</button>` : '';
+  const addSecInput = ed && ed.mode === 'add' && ed.after === undefined ? `<div class="sec-new">${secInput('', 'Nombre de la nueva sección')}</div>` : '';
   let body;
-  if (board) body = `<div class="board">${secs.map((s) => `<div class="col"><div class="group-h">${esc(s || 'Sin sección')} <span class="count">${secTasks(s).length}</span><span class="grow"></span>${s ? `<button data-act="secmenu" data-s="${esc(s)}">${I.dots}</button>` : ''}</div><div class="list">${secTasks(s).map((t) => row(t, { noProject: true })).join('')}</div>${addRow(`data-project="${p.id}" data-section="${esc(s || '')}"`)}</div>`).join('')}</div>`;
-  else body = secs.map((s) => { const l = secTasks(s); if (s && !l.length) return `<div class="group"><div class="group-h">${esc(s)} <span class="count">0</span><span class="grow"></span><button data-act="secmenu" data-s="${esc(s)}">${I.dots}</button></div>${addRow(`data-project="${p.id}" data-section="${esc(s)}"`)}</div>`; if (!s && !l.length && (p.sections || []).length) return ''; return `<div class="group"><div class="group-h">${esc(s || 'Tareas')} <span class="count">${l.length}</span><span class="grow"></span>${s ? `<button data-act="secmenu" data-s="${esc(s)}">${I.dots}</button>` : ''}</div><div class="list">${l.map((t) => row(t, { noProject: true })).join('')}</div>${addRow(`data-project="${p.id}" data-section="${esc(s || '')}"`)}</div>`; }).join('');
+  if (board) body = `<div class="board">${secs.map((s) => { const l = secTasks(s); return `<div class="col">${secHead(s, l.length)}<div class="list">${l.map((t) => row(t, { noProject: true })).join('')}</div>${addRow(`data-project="${p.id}" data-section="${esc(s || '')}"`)}</div>${s ? addAfter(s) : ''}`; }).join('')}${own ? `<div class="col col-add">${addSecInput || addSecBtn}</div>` : ''}</div>`;
+  else body = secs.map((s) => {
+    const l = secTasks(s);
+    if (!s && !l.length && sections.length) return '';
+    return `<div class="group">${secHead(s, l.length)}${l.length ? `<div class="list">${l.map((t) => row(t, { noProject: true })).join('')}</div>` : ''}${addRow(`data-project="${p.id}" data-section="${esc(s || '')}"`)}</div>${s ? addAfter(s) : ''}`;
+  }).join('') + addSecInput + addSecBtn;
   return `<div class="p-head">${ring(pct, p.color)}<div class="t"><h1>${esc(p.name)}</h1><small>${open.length} abiertas${p.status !== 'active' ? ' · ' + (p.status === 'paused' ? 'en pausa' : 'completado') : ''}</small></div>
+      ${priv ? `<button class="icon-btn eye${hidden ? '' : ' on'}" data-act="veil" aria-label="${hidden ? 'Mostrar tareas' : 'Ocultar tareas'}" title="${hidden ? 'Mostrar tareas' : 'Ocultar tareas'}">${hidden ? EYE_OFF : EYE}</button>` : ''}
       <div class="seg"><button class="${board ? '' : 'on'}" data-act="pmode" data-b="0" aria-label="Lista"><svg viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg></button><button class="${board ? 'on' : ''}" data-act="pmode" data-b="1" aria-label="Tablero"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="16" rx="1.5"/><rect x="14" y="4" width="6" height="10" rx="1.5"/></svg></button></div>
       <button class="icon-btn" ${goAttr({ name: 'stats', tab: 'project', id: p.id })} aria-label="Estadísticas"><svg viewBox="0 0 24 24"><path d="M4 20h16M7 17V10M12 17V5M17 17v-4"/></svg></button>
       <button class="icon-btn" data-act="share" aria-label="Compartir">${mem.length > 1 ? `<span style="display:flex">${mem.slice(0, 2).map((m) => `<span class="avatar" style="width:22px;height:22px;font-size:9px">${esc(initials(m.display_name))}</span>`).join('')}</span>` : '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/></svg>'}</button>
       <button class="icon-btn" data-act="projmenu" aria-label="Más">${I.dots}</button></div>
-    ${p.goal ? `<div class="goal">${esc(p.goal)}</div>` : ''}${body}
+    ${p.goal ? `<div class="goal${hidden ? ' veil-txt' : ''}">${hidden ? veilText(p.id + 'goal') : esc(p.goal)}</div>` : ''}${body}
     ${done.length ? `<button class="more-row" data-act="showdone"><span>${done.length} ${done.length === 1 ? 'completada' : 'completadas'}</span><span>${VIEW.showDone ? '⌄' : '›'}</span></button>${VIEW.showDone ? `<div class="list">${done.sort((a, b) => String(b.completed_at).localeCompare(String(a.completed_at))).map((t) => row(t, { noProject: true, log: true })).join('')}</div>` : ''}` : ''}`;
+}
+const secInput = (v, ph) => `<input class="field sec-input" id="sec-input" value="${esc(v)}" placeholder="${esc(ph)}" maxlength="60" autocomplete="off" enterkeyhint="done"><button class="btn primary small" id="sec-ok">${v ? 'Guardar' : 'Añadir'}</button><button class="icon-btn" id="sec-cancel" aria-label="Cancelar">${I.close}</button>`;
+
+/* ---------- Secciones: añadir, renombrar, mover y eliminar desde el propio proyecto ---------- */
+function editSection(ed) { VIEW.secEdit = ed; render(); }
+function bindSecInput() {
+  const i = $('#sec-input'); if (!i) return;
+  const ed = VIEW.secEdit; if (!ed) return;
+  const close = () => { VIEW.secEdit = null; render(); };
+  const commit = (keepOpen) => {
+    const v = i.value.trim().slice(0, 60), p = PJ(ed.pid); if (!p) return close();
+    if (!v) return close();
+    if (ed.mode === 'add') {
+      if ((p.sections || []).includes(v)) { toast('Ya hay una sección con ese nombre', null, null, true); i.select(); return; }
+      secOp(p.id, 'add', ed.after !== undefined ? { s: v, after: ed.after } : { s: v });
+      if (keepOpen && ed.after === undefined) { render(); bindSecInput(); const j = $('#sec-input'); if (j) j.value = ''; return; } // seguir añadiendo
+    } else if (ed.mode === 'ren' && v !== ed.s) {
+      if ((p.sections || []).includes(v)) { toast('Ya hay una sección con ese nombre', null, null, true); i.select(); return; }
+      secOp(p.id, 'ren', { s: ed.s, n: v });
+      for (const t of S.tasks.filter((x) => x.project_id === p.id && x.section === ed.s)) upd('tasks', t.id, { section: v });
+    }
+    close();
+  };
+  i.focus(); if (ed.mode === 'ren') i.select();
+  i.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(true); } if (e.key === 'Escape') { e.preventDefault(); close(); } };
+  $('#sec-ok').onclick = (e) => { e.stopPropagation(); commit(false); };
+  $('#sec-cancel').onclick = (e) => { e.stopPropagation(); close(); };
+}
+function deleteSection(pid, s) {
+  const tasks = S.tasks.filter((t) => t.project_id === pid && t.section === s);
+  const list = (PJ(pid) || {}).sections || [], at = list.indexOf(s), back = at > 0 ? { after: list[at - 1] } : { first: true };
+  if (tasks.some(isOpen) && !confirm(`¿Eliminar la sección «${s}»? Sus ${tasks.filter(isOpen).length} tareas pasarán a «Sin sección».`)) return;
+  secOp(pid, 'del', { s });
+  for (const t of tasks) upd('tasks', t.id, { section: null });
+  render();
+  toast(`Sección «${s}» eliminada`, 'Deshacer', () => { secOp(pid, 'add', Object.assign({ s }, back)); for (const t of tasks) upd('tasks', t.id, { section: s }); render(); });
 }
 
 /* ---------- Acciones de las vistas ---------- */
@@ -635,6 +850,9 @@ const ACT = {
   share: () => openShare(VIEW.id),
   projmenu: () => projectMenu(VIEW.id),
   secmenu: (d) => sectionMenu(VIEW.id, d.s),
+  secadd: () => editSection({ pid: VIEW.id, mode: 'add' }),
+  secren: (d) => editSection({ pid: VIEW.id, mode: 'ren', s: d.s }),
+  veil: () => toggleReveal(VIEW.id),
   filtermenu: () => openPop({ title: 'Filtro', items: [{ label: 'Eliminar filtro', v: 'del' }], onPick: () => { const f = (settings().filters || []).slice(); f.splice(VIEW.i, 1); saveSettings({ filters: f }); go({ name: 'today' }); } }),
 };
 function quickDefaults(ds = {}) {
@@ -1222,6 +1440,7 @@ function editProject(id) {
       <div class="seclabel">Secciones</div>
       <div class="list-edit" id="pe-secs"></div>
       <div class="row"><input class="field grow" id="pe-newsec" placeholder="Nueva sección"><button class="btn" id="pe-addsec">Añadir</button></div>
+      <label class="priv-opt"><input type="checkbox" id="pe-priv" ${p && isPrivate(p.id) ? 'checked' : ''}><span>${LOCK}<b>Ocultar tareas</b><small>Se ven difuminadas hasta que pulses el ojo. Ideal para proyectos personales en el trabajo.</small></span></label>
       <button class="btn primary" id="pe-save">${p ? 'Guardar' : 'Crear proyecto'}</button>
     </div>`, { full: true });
   const drawSecs = () => { $('#pe-secs', sh).innerHTML = st.sections.map((s, i) => `<div class="r card"><span class="grow">${esc(s)}</span><button data-up="${i}" class="muted">↑</button><button data-rm="${i}" class="muted">✕</button></div>`).join(''); $$('[data-rm]', sh).forEach((b) => b.onclick = () => { st.sections.splice(b.dataset.rm, 1); drawSecs(); }); $$('[data-up]', sh).forEach((b) => b.onclick = () => { const i = Number(b.dataset.up); if (i > 0) { [st.sections[i - 1], st.sections[i]] = [st.sections[i], st.sections[i - 1]]; drawSecs(); } }); };
@@ -1233,14 +1452,17 @@ function editProject(id) {
   $('#pe-save', sh).onclick = () => {
     const name = $('#pe-name', sh).value.trim(); if (!name) { $('#pe-name', sh).focus(); return; }
     const data = { name: name.slice(0, 120), goal: $('#pe-goal', sh).value.trim(), area_id: $('#pe-area', sh).value || null, review_every: Number($('#pe-rev', sh).value), color: st.color, sections: st.sections };
+    const wantPriv = $('#pe-priv', sh).checked;
     if (p) {
+      if (wantPriv !== isPrivate(p.id)) setPrivate(p.id, wantPriv);
+      if (JSON.stringify(st.sections) === JSON.stringify(p.sections || [])) delete data.sections; // sin cambios: no pisar lo de otros dispositivos
       const removed = (p.sections || []).filter((s) => !st.sections.includes(s));
       upd('projects', p.id, data);
       for (const t of S.tasks.filter((x) => x.project_id === p.id && removed.includes(x.section))) upd('tasks', t.id, { section: null });
       closeSheet(); render();
     } else {
       const row = Object.assign({ id: uid(), owner_id: ME, status: 'active', position: S.projects.length, last_review: today(), share_code: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }, data);
-      ins('projects', row); closeSheet(); go({ name: 'project', id: row.id });
+      ins('projects', row); if (wantPriv) setPrivate(row.id, true); closeSheet(); go({ name: 'project', id: row.id });
     }
   };
   if (!p) $('#pe-name', sh).focus();
@@ -1248,29 +1470,37 @@ function editProject(id) {
 function projectMenu(id) {
   const p = PJ(id); if (!p) return;
   const own = isOwner(id);
+  const privItem = isPrivate(id) ? { label: 'Dejar de ocultar tareas', v: 'unpriv' } : { label: 'Ocultar tareas (privado)', v: 'priv' };
   const items = own ? [
-    { label: 'Editar proyecto', v: 'edit' }, { label: 'Añadir sección', v: 'sec' }, { label: 'Marcar como revisado', v: 'rev' },
+    { label: 'Editar proyecto', v: 'edit' }, { label: 'Añadir sección', v: 'sec' }, privItem, { label: 'Marcar como revisado', v: 'rev' },
     { label: p.status === 'paused' ? 'Reanudar' : 'Pausar (Algún día)', v: 'pause' }, { label: p.status === 'done' ? 'Reabrir' : 'Marcar como completado', v: 'done' },
     { label: 'Compartir', v: 'share' }, { label: 'Eliminar proyecto', v: 'del' },
-  ] : [{ label: 'Añadir sección', v: 'sec' }, { label: 'Ver miembros', v: 'share' }, { label: 'Abandonar proyecto', v: 'leave' }];
+  ] : [privItem, { label: 'Ver miembros', v: 'share' }, { label: 'Abandonar proyecto', v: 'leave' }];
   openPop({ title: p.name, items, onPick: async (it) => {
     if (it.v === 'edit') editProject(id);
-    if (it.v === 'sec') { const n = prompt('Nombre de la sección'); if (n && n.trim()) { if (own) upd('projects', id, { sections: [...(p.sections || []), n.trim().slice(0, 60)] }); else toast('Solo quien creó el proyecto puede añadir secciones'); render(); } }
+    if (it.v === 'sec') { if (VIEW.name !== 'project' || VIEW.id !== id) go({ name: 'project', id }); editSection({ pid: id, mode: 'add' }); }
+    if (it.v === 'priv' || it.v === 'unpriv') setPrivate(id, it.v === 'priv');
     if (it.v === 'rev') { upd('projects', id, { last_review: today() }); toast('Proyecto revisado'); render(); }
     if (it.v === 'pause') { upd('projects', id, { status: p.status === 'paused' ? 'active' : 'paused' }); render(); }
     if (it.v === 'done') { upd('projects', id, { status: p.status === 'done' ? 'active' : 'done' }); render(); }
     if (it.v === 'share') openShare(id);
-    if (it.v === 'del') { const n = S.tasks.filter((t) => t.project_id === id).length; if (confirm(`¿Eliminar «${p.name}» y sus ${n} tareas? No se puede deshacer.`)) { for (const t of S.tasks.filter((x) => x.project_id === id)) del('tasks', t.id); del('projects', id); go({ name: 'projects' }); toast('Proyecto eliminado'); } }
+    if (it.v === 'del') { const n = S.tasks.filter((t) => t.project_id === id).length; if (confirm(`¿Eliminar «${p.name}» y sus ${n} tareas? No se puede deshacer.`)) { for (const t of S.tasks.filter((x) => x.project_id === id)) del('tasks', t.id); del('projects', id); if (isPrivate(id)) saveSettings({ privateProjects: privateIds().filter((x) => x !== id) }); go({ name: 'projects' }); toast('Proyecto eliminado'); } }
     if (it.v === 'leave') { if (!confirm('¿Abandonar este proyecto compartido?')) return; const r = await sb.rpc('abandonar_proyecto', { p_project: id }); if (r.error) return toast(r.error.message, null, null, true); S.projects = S.projects.filter((x) => x.id !== id); S.tasks = S.tasks.filter((t) => t.project_id !== id); saveCache(); go({ name: 'projects' }); }
   } });
 }
 function sectionMenu(pid, s) {
   const p = PJ(pid); if (!p) return;
   if (!isOwner(pid)) return toast('Solo quien creó el proyecto puede cambiar las secciones');
-  openPop({ title: s, items: [{ label: 'Renombrar sección', v: 'ren' }, { label: 'Eliminar sección', v: 'del' }], onPick: (it) => {
-    const tasks = S.tasks.filter((t) => t.project_id === pid && t.section === s);
-    if (it.v === 'ren') { const n = (prompt('Nuevo nombre', s) || '').trim(); if (!n || n === s) return; upd('projects', pid, { sections: p.sections.map((x) => x === s ? n.slice(0, 60) : x) }); for (const t of tasks) upd('tasks', t.id, { section: n.slice(0, 60) }); render(); }
-    if (it.v === 'del') { if (!confirm(`¿Eliminar la sección «${s}»? Sus ${tasks.length} tareas pasarán a «Sin sección».`)) return; upd('projects', pid, { sections: p.sections.filter((x) => x !== s) }); for (const t of tasks) upd('tasks', t.id, { section: null }); render(); }
+  const l = p.sections || [], i = l.indexOf(s);
+  const items = [{ label: 'Renombrar', v: 'ren' }, { label: 'Añadir sección debajo', v: 'add' }];
+  if (i > 0) items.push({ label: 'Mover arriba', v: 'up' });
+  if (i >= 0 && i < l.length - 1) items.push({ label: 'Mover abajo', v: 'down' });
+  items.push({ label: 'Eliminar sección', v: 'del' });
+  openPop({ title: s, items, onPick: (it) => {
+    if (it.v === 'ren') editSection({ pid, mode: 'ren', s });
+    if (it.v === 'add') editSection({ pid, mode: 'add', after: s });
+    if (it.v === 'up' || it.v === 'down') { secOp(pid, 'move', { s, dir: it.v === 'up' ? -1 : 1 }); render(); }
+    if (it.v === 'del') deleteSection(pid, s);
   } });
 }
 async function openShare(id) {
@@ -1322,7 +1552,7 @@ function editFilter() {
     const list = [...(settings().filters || []), f]; saveSettings({ filters: list }); closeSheet(); go({ name: 'filter', i: list.length - 1 });
   };
 }
-function saveSettings(patch) { const s = Object.assign({}, settings(), patch); upd('profiles', ME, { settings: s }); }
+function saveSettings(patch) { mut({ k: 'set', patch: Object.assign({}, patch) }); }
 
 /* ---------- Enfoque (Pomodoro) ---------- */
 const MODES = { '25/5': [25, 5], '50/10': [50, 10], '90/15': [90, 15] };
@@ -1339,7 +1569,7 @@ function focusView() {
   return head('Enfoque') + `<div class="card pomo">
     <div class="seg">${Object.keys(MODES).map((m) => `<button class="${POMO.mode === m ? 'on' : ''}" data-act="pmode2" data-m="${m}">${m.replace('/', ' / ')}</button>`).join('')}</div>
     <div class="pomo-ring"><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="46" stroke="var(--surface2)"/><circle id="pomo-arc" cx="50" cy="50" r="46" stroke="var(--sage)" stroke-linecap="round" stroke-dasharray="${(289 * (1 - pct)).toFixed(1)} 400"/></svg><div><div class="time" id="pomo-time">${fmtClock(left)}</div><span class="phase">${POMO.phase === 'work' ? 'Concentración' : 'Descanso'}</span></div></div>
-    <div class="task-sel"><div class="seclabel" style="padding-bottom:4px">Tarea</div><select class="field" data-act="ptask" id="pomo-task"><option value="">Sin tarea concreta</option>${opts.map((t) => `<option value="${t.id}" ${POMO.task === t.id ? 'selected' : ''}>${esc(t.title.slice(0, 70))}</option>`).join('')}</select></div>
+    <div class="task-sel"><div class="seclabel" style="padding-bottom:4px">Tarea</div><select class="field" data-act="ptask" id="pomo-task"><option value="">Sin tarea concreta</option>${opts.map((t) => `<option value="${t.id}" ${POMO.task === t.id ? 'selected' : ''}>${esc(safeTitle(t).slice(0, 70))}</option>`).join('')}</select></div>
     <div class="ctrl"><button class="btn primary small" data-act="pstart">${POMO.running ? '❚❚ Pausar' : '▷ Empezar'}</button><button class="btn ghost small" data-act="preset">↺ Reiniciar</button><button class="btn ghost small" data-act="pskip">Saltar fase</button></div>
   </div>
   <div class="minis"><div class="kpi"><span class="l">Enfoque hoy</span><b>${todayMin} <small>min</small></b><span class="s">${ses} ${ses === 1 ? 'sesión' : 'sesiones'}</span></div>
@@ -1366,7 +1596,7 @@ function endPhase(record) {
     const minutes = MODES[POMO.mode][0], t = POMO.task && S.tasks.find((x) => x.id === POMO.task);
     ins('focus_sessions', { id: uid(), user_id: ME, day: today(), minutes, task_id: t ? t.id : null, project_id: t ? t.project_id : null, created_at: new Date().toISOString() });
     if (t) upd('tasks', t.id, { focus_min: (t.focus_min || 0) + minutes });
-    notify('Sesión de enfoque completada', `${minutes} min${t ? ' en «' + t.title + '»' : ''}. Toca descansar.`);
+    notify('Sesión de enfoque completada', `${minutes} min${t ? ' en «' + (isPrivate(t.project_id) ? 'Tarea privada' : t.title) + '»' : ''}. Toca descansar.`);
   } else if (record) notify('Descanso terminado', 'Vuelve al enfoque cuando quieras.');
   POMO.phase = POMO.phase === 'work' ? 'break' : 'work'; POMO.running = false; POMO.left = phaseLen(); savePomo(); render();
 }
@@ -1578,7 +1808,7 @@ function openSearch() {
     html += views.map(([n, v, ic]) => `<button class="pop-i" data-v='${esc(JSON.stringify(v))}'>${ic}<span>${esc(n)}</span><span class="k">Vista</span></button>`).join('');
     if (nq) {
       html += S.projects.filter((p) => norm(p.name).includes(nq)).map((p) => `<button class="pop-i" data-v='${esc(JSON.stringify({ name: 'project', id: p.id }))}'><i class="pdot" style="background:${esc(p.color)};margin:0 4px"></i><span>${esc(p.name)}</span><span class="k">Proyecto</span></button>`).join('');
-      html += S.tasks.filter((t) => norm(t.title + ' ' + (t.notes || '')).includes(nq)).slice(0, 40).map((t) => `<button class="pop-i" data-t="${t.id}"><span class="check p${t.priority}${t.status === 'done' ? ' on' : ''}" style="width:16px;height:16px"></span><span style="${t.status === 'done' ? 'text-decoration:line-through;color:var(--ink3)' : ''}">${esc(t.title)}</span><span class="k">${t.project_id && PJ(t.project_id) ? esc(PJ(t.project_id).name) : 'Tarea'}</span></button>`).join('');
+      html += S.tasks.filter((t) => !veiled(t) && norm(t.title + ' ' + (t.notes || '')).includes(nq)).slice(0, 40).map((t) => `<button class="pop-i" data-t="${t.id}"><span class="check p${t.priority}${t.status === 'done' ? ' on' : ''}" style="width:16px;height:16px"></span><span style="${t.status === 'done' ? 'text-decoration:line-through;color:var(--ink3)' : ''}">${esc(t.title)}</span><span class="k">${t.project_id && PJ(t.project_id) ? esc(PJ(t.project_id).name) : 'Tarea'}</span></button>`).join('');
     }
     $('#sr-list', o).innerHTML = html || '<div class="hint" style="padding:10px">Sin resultados</div>';
     $$('[data-v]', o).forEach((b) => b.onclick = () => go(JSON.parse(b.dataset.v)));
@@ -1594,7 +1824,7 @@ function openBell() {
     <div style="padding:0 8px 10px"><button class="pop-i" id="bl-cfg">${I.gear}<span style="font-size:13px">Configurar avisos</span></button></div>`);
   $('#bl-x', o).onclick = closeOverlay;
   $('#bl-cfg', o).onclick = () => go({ name: 'settings', page: 'avisos' });
-  $$('[data-i]', o).forEach((b) => b.onclick = () => { const x = a[Number(b.dataset.i)]; if (x.task) { closeOverlay(); openTask(x.task); } else go(x.go); });
+  $$('[data-i]', o).forEach((b) => b.onclick = () => { const x = a[Number(b.dataset.i)]; if (x.task) { const t = S.tasks.find((y) => y.id === x.task); if (t && veiled(t)) REVEAL.add(t.project_id); closeOverlay(); openTask(x.task); } else go(x.go); });
 }
 
 /* ---------- Gestos, teclado y pantalla ---------- */
@@ -1766,8 +1996,12 @@ const TUTORIAL = [
       tips: ['La regla de los 2 minutos se puede desactivar en Ajustes → Planificación.'] },
     { id: 'proyectos', title: 'Proyectos y secciones', icon: '<svg viewBox="0 0 24 24"><path d="M3.5 7.5A1.5 1.5 0 0 1 5 6h4l2 2h8a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z"/></svg>', min: 3, go: { name: 'projects' },
       intro: 'Un proyecto es cualquier resultado que necesita más de un paso: «Comisionar la línea de toneles», «Organizar el viaje a México».',
-      steps: ['En Proyectos, pulsa <b>+ Nuevo</b>. Ponle nombre y el <b>resultado deseado</b>: cómo sabrás que está terminado.', 'Elige área, color y cada cuántos días quieres revisarlo.', 'Añade <b>secciones</b> para agrupar las tareas (por ejemplo «Ingeniería», «Compras», «Puesta en marcha»).', 'Dentro del proyecto, cambia entre vista de <b>lista</b> y de <b>tablero</b> con los botones de arriba.', 'El círculo muestra el porcentaje completado. El menú ⋯ permite editar, pausar, completar o eliminar el proyecto.'],
-      tips: ['Cada proyecto activo debería tener siempre al menos una próxima acción. La Revisión semanal te avisa de los que no la tienen.', 'Los proyectos en pausa se ven en Algún día / Quizás.'] },
+      steps: ['En Proyectos, pulsa <b>+ Nuevo</b>. Ponle nombre y el <b>resultado deseado</b>: cómo sabrás que está terminado.', 'Elige área, color y cada cuántos días quieres revisarlo.', 'Dentro del proyecto, pulsa <b>Añadir sección</b> al final de la lista para agrupar las tareas (por ejemplo «Ingeniería», «Compras», «Puesta en marcha»). Pulsa Enter y escribe la siguiente sin salir.', 'Toca el <b>nombre de una sección</b> para renombrarla. Su botón ⋯ permite añadir otra debajo, moverla arriba o abajo y eliminarla (con opción de deshacer).', 'Cambia entre vista de <b>lista</b> y de <b>tablero</b> con los botones de arriba; en el tablero, la última columna sirve para añadir secciones.', 'El círculo muestra el porcentaje completado. El menú ⋯ permite editar, pausar, completar o eliminar el proyecto.'],
+      tips: ['Cada proyecto activo debería tener siempre al menos una próxima acción. La Revisión semanal te avisa de los que no la tienen.', 'Los proyectos en pausa se ven en Algún día / Quizás.', 'Al eliminar una sección, sus tareas pasan a «Sin sección»: no se borra ninguna.'] },
+    { id: 'privado', title: 'Proyectos privados', icon: EYE_OFF, min: 1, go: { name: 'projects' },
+      intro: 'Oculta las tareas de los proyectos que quieras, como el saldo oculto de una app del banco. Útil si usas Summit en el trabajo y tienes un proyecto personal.',
+      steps: ['Abre el proyecto → ⋯ → <b>Ocultar tareas (privado)</b>. También está en Editar proyecto.', 'Sus tareas se ven difuminadas en todas las vistas: Hoy, Próximos, Calendario, búsqueda y avisos.', 'Para verlas, pulsa el <b>ojo</b> de la cabecera del proyecto o toca una tarea difuminada: es el segundo clic.', 'Se vuelven a ocultar solas al cambiar de pantalla o al salir de la app.'],
+      tips: ['El nombre del proyecto sigue visible (con un candado); lo que se oculta es el contenido de las tareas.', 'El ajuste se guarda en tu cuenta y se aplica en todos tus dispositivos.'] },
     { id: 'compartir', title: 'Proyectos compartidos', icon: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/></svg>', min: 2, go: { name: 'projects' },
       intro: 'Puedes compartir un proyecto con otra persona que tenga su propia cuenta de Summit. Cada uno ve el proyecto en su app y añade sus tareas.',
       steps: ['Abre el proyecto y pulsa el icono de personas → <b>Generar código</b> (empieza por SUM-).', 'Envía el código. La otra persona va a Proyectos → <b>Unirme</b> y lo escribe.', 'En las tareas del proyecto aparece el campo <b>Asignada a</b>; al escribir puedes usar <b>+nombre</b>.', 'Desde la misma pantalla puedes quitar miembros, generar un código nuevo o dejar de compartir.'],
@@ -1829,6 +2063,10 @@ const TUTORIAL = [
       intro: 'Conecta Summit con Claude para preguntarle por tus tareas o pedirle que las cree y organice por ti.',
       steps: ['Ve a Ajustes → <b>Claude</b> y pulsa <b>Generar clave</b>. Copia la URL del conector.', 'En Claude: Ajustes → Conectores → <b>Añadir conector personalizado</b> y pega la URL.', 'Pídele cosas como «¿Qué tengo para hoy?», «Crea un proyecto para la parada de la línea con estas tareas» o «Prepárame la revisión semanal».'],
       tips: ['Claude solo accede a tus datos y a los proyectos compartidos contigo.', 'Generar una clave nueva invalida la anterior.'] },
+    { id: 'sinconexion', title: 'Trabajar sin conexión', icon: I.cloud, min: 1, go: { name: 'settings', page: 'datos' },
+      intro: 'Summit funciona sin internet. Todo lo que capturas o cambias se guarda en el dispositivo y se sube solo cuando vuelve la conexión.',
+      steps: ['Sin red aparece arriba la etiqueta <b>sin conexión</b> con el número de cambios guardados en el dispositivo. Tócala para reintentar.', 'Puedes usar la misma cuenta en varios dispositivos sin conexión a la vez: al recuperar la red, cada uno sube lo suyo y descarga lo de los demás.', 'Si una tarea capturada sin conexión pertenecía a un proyecto que entretanto se borró, se guarda en la <b>Bandeja</b>: nunca se pierde una captura.'],
+      tips: ['Para que el iPhone no borre los datos locales, instala Summit en la pantalla de inicio (Compartir → Añadir a pantalla de inicio).', 'No cierres sesión con cambios pendientes: se perderían los que aún no se han subido.'] },
     { id: 'ajustes', title: 'Ajustes y datos', icon: I.gear, min: 1, go: { name: 'settings' },
       intro: 'Personaliza Summit a tu manera.',
       steps: ['<b>Apariencia</b>: claro, oscuro o el del sistema.', '<b>Avisos</b>: días de antelación para las fechas límite y aviso de vencidas.', '<b>Planificación</b>: día de revisión, capacidad diaria, regla de los 2 minutos y zona horaria.', '<b>Datos</b>: sincronizar a mano y exportar una copia de tus datos en JSON.', '<b>Cuenta</b>: nombre, contraseña y cerrar sesión.'] },
