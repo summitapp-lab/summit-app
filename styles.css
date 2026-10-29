@@ -355,8 +355,9 @@ svg text{stroke:none;fill:var(--ink3);font-family:Plex,monospace}
 .list-edit{display:flex;flex-direction:column;gap:6px}
 .list-edit .r{padding:8px 12px}
 
-#toast{position:fixed;left:12px;right:12px;bottom:calc(var(--tab-h) + var(--safe-b) + 12px);z-index:70;background:#EEF1EE;color:#1A1F1C;padding:9px 10px 9px 14px;border-radius:10px;font-size:14px;display:flex;gap:10px;align-items:center;box-shadow:var(--shadow);animation:up .2s;max-width:600px;margin:0 auto}
+#toast{position:fixed;left:12px;right:12px;top:calc(var(--safe-t) + 8px);z-index:70;background:#EEF1EE;color:#1A1F1C;padding:9px 10px 9px 14px;border-radius:10px;font-size:14px;display:flex;gap:10px;align-items:center;box-shadow:var(--shadow);animation:down .2s;max-width:600px;margin:0 auto}
 #toast.err{background:var(--orange);color:#2a1206}
+#toast.low{top:auto;bottom:calc(var(--safe-b) + 12px);animation:up .2s}
 #toast .grow{flex:1}
 #toast button{font-weight:700;font-size:12.5px;padding:5px 9px;border-radius:7px;background:rgba(0,0,0,.1)}
 #toast svg{width:15px;height:15px}
@@ -371,7 +372,7 @@ body.pinned #app{padding-left:272px}
 body.pinned #tabbar{display:none}
 body.pinned #fab{bottom:24px;right:24px}
 body.pinned #view{padding-bottom:110px}
-body.pinned #toast{left:284px;bottom:24px}
+body.pinned #toast{left:284px;top:16px}
 body.pinned #sheet{left:272px}
 body.pinned #sheet.top{left:284px;right:12px}
 body.pinned #pop,body.pinned .overlay-card{left:272px}
@@ -506,3 +507,26 @@ kbd{font:500 11.5px Plex,monospace;padding:2px 6px;border-radius:5px;background:
   .p-head .t{flex:1 1 calc(100% - 52px)}
   .p-head .t + *{margin-left:auto}
 }
+
+/* Botón Procesar en cualquier lista */
+.proc-btn{display:inline-flex;align-items:center;gap:6px;margin:-4px 0 10px;padding:6px 12px;border-radius:999px;border:1px solid var(--line2);background:var(--surface);color:var(--ink);font-weight:600;font-size:13px}
+.proc-btn .ic{width:15px;height:15px;stroke:var(--sage)}
+/* Tutorial: recorridos guiados */
+#tour{position:fixed;inset:0;z-index:200;pointer-events:none}
+.tour-hole{position:fixed;border-radius:12px;box-shadow:0 0 0 9999px rgba(8,12,10,.58);outline:2px solid var(--sage);transition:left .22s,top .22s,width .22s,height .22s}
+.tour-dim{position:fixed;inset:0;background:rgba(8,12,10,.58)}
+.tour-tip{position:fixed;pointer-events:auto;background:var(--surface);color:var(--ink);border:1px solid var(--line2);border-radius:14px;box-shadow:var(--shadow);padding:12px 14px;display:flex;flex-direction:column;gap:4px;transition:top .22s,left .22s;animation:up .2s}
+.tour-tip b{font:700 16px Bricolage}
+.tour-tip p{margin:0 0 6px;font-size:14.5px;line-height:1.45;color:var(--ink2,var(--ink))}
+.tour-n{color:var(--ink3);font-size:12px}
+.tour-nav{display:flex;align-items:center;gap:6px}
+.tour-dots{flex:1;display:flex;gap:5px}
+.tour-dots i{width:6px;height:6px;border-radius:50%;background:var(--line2)}
+.tour-dots i.on{background:var(--sage);width:16px;border-radius:3px}
+
+#view .code{cursor:copy}
+body.pinned #toast.low{top:auto;bottom:24px}
+.tour-tip{padding-right:44px}
+.tour-x{position:absolute;top:8px;right:8px;width:32px;height:32px;border-radius:50%;background:var(--surface2);color:var(--ink);display:grid;place-items:center}
+.tour-x svg{width:16px;height:16px}
+.tour-nav{margin-right:-30px}
