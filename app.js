@@ -2,7 +2,7 @@
    PWA sin dependencias de compilación. Datos en Supabase (esquema `summit`), con caché local
    y cola de cambios para funcionar sin conexión. */
 'use strict';
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.7.0';
 const CFG = window.SUMMIT_CONFIG || {};
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -1118,7 +1118,7 @@ function parseDateWord(w) {
 }
 const DATE_PHRASES = /(^|\s)((?:el\s|para\s)?(?:pasado\s+ma[ñn]ana|ma[ñn]ana|hoy|fin\s+de\s+semana|finde|pr[oó]xima\s+semana|la\s+semana\s+que\s+viene|en\s+\d{1,3}\s+d[ií]as?|en\s+\d{1,2}\s+semanas?|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|\d{4}-\d{2}-\d{2}))(?=\s|$)/i;
 function parseQuick(text, base = {}) {
-  const out = { title: text, project_id: null, section: null, contexts: [], priority: 0, due_date: null, due_time: null, deadline: null, assignee: null, tokens: [] };
+  const out = { title: text, project_id: null, section: null, contexts: [], priority: 0, due_date: null, due_time: null, deadline: null, assignee: null, waiting_for: null, tokens: [] };
   let s = ' ' + String(text || '').replace(/\s+/g, ' ') + ' ';
   const take = (re, fn) => { s = s.replace(re, (...a) => { const r = fn(...a); if (r === false) return a[0]; return ' '; }); };
   // Fecha límite entre llaves: {viernes}, {3/11}
@@ -1133,6 +1133,8 @@ function parseQuick(text, base = {}) {
   take(/\s[@%]([\p{L}\d_.-]+)(?=\s)/gu, (m, c) => { const f = contexts().find((x) => norm(x) === norm(c)) || contexts().find((x) => norm(x).startsWith(norm(c))); if (!f) return false; out.contexts.push(f); out.tokens.push('ctx'); });
   // Persona asignada (solo en proyectos compartidos)
   take(/\s\+([\p{L}\d_.-]+)(?=\s)/gu, (m, c) => { const pid = out.project_id || base.project_id; const mm = pid && membersOf(pid).find((x) => norm(x.display_name).startsWith(norm(c)) || (norm(c) === 'yo' && x.user_id === ME)); if (!mm) return false; out.assignee = mm.user_id; out.tokens.push('assignee'); });
+  // Delegar: >persona (una persona conocida o un nombre nuevo; _ para nombres con espacio: >Ana_López)
+  take(/\s>([\p{L}\d_.'-]+)(?=\s)/gu, (m, c) => { const ds = delegates(), f = ds.find((x) => norm(x) === norm(c.replace(/_/g, ' '))) || ds.find((x) => norm(x).startsWith(norm(c))); out.waiting_for = (f || c.replace(/_/g, ' ')).slice(0, 80); out.tokens.push('delegate'); });
   // Hora
   take(/\s(?:a\s+las\s+)?(\d{1,2}):(\d{2})(?=\s)/i, (m, h, mi) => { if (Number(h) > 23 || Number(mi) > 59) return false; out.due_time = h.padStart(2, '0') + ':' + mi; out.tokens.push('time'); });
   // Fecha en lenguaje natural (la primera que aparezca)
@@ -1150,22 +1152,23 @@ function quickSuggestions(sym, q, st) {
   if (sym === '/') { const p = PJ(pid); return p ? (p.sections || []).filter(match).map((x) => ({ label: x, v: x, icon: I.sub })) : []; }
   if (sym === '@' || sym === '%') return contexts().filter(match).map((x) => ({ label: x, v: x, icon: I.at }));
   if (sym === '+') return pid ? membersOf(pid).map((m) => ({ label: m.user_id === ME ? 'Yo' : m.display_name || 'Miembro', v: m.user_id, icon: I.user })).filter((x) => match(x.label)) : [];
+  if (sym === '>') { const l = delegates().filter(match).map((x) => ({ label: x, v: x, icon: I.hourglass })); if (q && !delegates().some((x) => norm(x) === nq)) l.push({ label: `Delegar a «${q.replace(/_/g, ' ')}»`, v: q.replace(/_/g, ' '), icon: I.hourglass }); return l; }
   if (sym === '{') return [['Hoy', today()], ['Mañana', addDays(today(), 1)], ['Fin de semana', weekendDay()], ['Próxima semana', nextWeekday(1)]].map(([l, v]) => ({ label: l, v, icon: I.flag, k: fmtDate(v) })).filter((x) => match(x.label));
   return [];
 }
-const SYM_NAMES = { '#': 'Proyecto', '/': 'Sección', '@': 'Contexto', '%': 'Contexto', '+': 'Asignar a', '{': 'Fecha límite' };
+const SYM_NAMES = { '#': 'Proyecto', '/': 'Sección', '@': 'Contexto', '%': 'Contexto', '+': 'Asignar a', '>': 'Delegar a', '{': 'Fecha límite' };
 
 function openQuick(defaults) {
   defaults = defaults || viewDefaults();
   // set: lo elegido a mano (chips o sugerencias) manda sobre lo escrito
-  const st = { project_id: defaults.project_id || null, section: defaults.section || null, due_date: defaults.due_date || null, due_time: null, deadline: null, priority: 4, contexts: defaults.contexts || [], assignee: null, photos: [], set: {} };
+  const st = { project_id: defaults.project_id || null, section: defaults.section || null, due_date: defaults.due_date || null, due_time: null, deadline: null, priority: 4, contexts: defaults.contexts || [], assignee: null, waiting_for: null, photos: [], set: {} };
   let expanded = !!(st.project_id || st.due_date || st.contexts.length), sugg = [], sel = 0, trig = null;
   const sh = openSheet(`<div class="sheet-body" style="padding-top:14px">
       <textarea class="qa-input grow" id="qa-title" rows="1" placeholder="Nueva tarea" autocomplete="off" enterkeyhint="done" spellcheck="true"></textarea>
       <div class="suggest-box" id="qa-sug" hidden></div>
       <div id="qa-opts"></div>
       <div class="qa-photos" id="qa-ph"></div>
-      <div class="qa-hint">#proyecto · /sección · @contexto · p1 · mañana 10:00 · {fecha límite}</div>
+      <div class="qa-hint">#proyecto · /sección · @contexto · >persona · p1 · mañana 10:00 · {fecha límite}</div>
       <div class="qa-foot"><label class="icon-btn" aria-label="Foto">${I.cam.replace('class="ic"', '')}<input type="file" accept="image/*" id="qa-file" hidden multiple></label><span class="grow"></span><button class="btn ghost small" id="qa-cancel">Cancelar</button><button class="btn primary small" id="qa-add">Añadir</button></div>
     </div>`, { top: true, quick: true });
   const inp = $('#qa-title', sh);
@@ -1179,6 +1182,7 @@ function openQuick(defaults) {
       due_date: pick('due_date', p.due_date), due_time: st.set.due_date ? st.due_time : (p.due_time || st.due_time),
       deadline: pick('deadline', p.deadline), priority: st.set.priority ? st.priority : (p.priority || st.priority),
       contexts: [...new Set([...st.contexts, ...p.contexts])], assignee: st.set.assignee ? st.assignee : (p.assignee || st.assignee),
+      waiting_for: st.set.waiting_for ? st.waiting_for : (p.waiting_for || st.waiting_for),
     };
   };
   const drawOpts = () => {
@@ -1192,6 +1196,7 @@ function openQuick(defaults) {
       <button class="qchip${m.deadline ? ' set' : ''}" data-c="deadline">${I.flag}${m.deadline ? esc(fmtDate(m.deadline)) : 'Límite'}</button>
       <button class="qchip${m.priority < 4 ? ' set' : ''}" data-c="prio">${I.flag}${m.priority < 4 ? 'P' + m.priority : 'Prioridad'}</button>
       <button class="qchip${m.contexts.length ? ' set' : ''}" data-c="ctx">${I.at}${m.contexts.length ? m.contexts.map(esc).join(', ') : 'Contexto'}</button>
+      <button class="qchip${m.waiting_for ? ' set' : ''}" data-c="delegate" title="Delegar (Alt + W)">${I.hourglass.replace('<svg', '<svg class="ic"')}${m.waiting_for ? esc(m.waiting_for) : 'Delegar'}</button>
       ${shared ? `<button class="qchip${m.assignee ? ' set' : ''}" data-c="assignee">${I.user}${m.assignee ? esc(personName(m.assignee)) : 'Asignar'}</button>` : ''}</div>`;
     $$('.qchip', o).forEach((b) => b.onclick = () => {
       const c = b.dataset.c, kb = true, mm = merged();
@@ -1201,13 +1206,23 @@ function openQuick(defaults) {
       if (c === 'prio') pickPriority(mm.priority, (v) => { st.priority = v; st.set.priority = true; drawOpts(); }, kb);
       if (c === 'ctx') pickContexts(mm.contexts, (v) => { st.contexts = v; inp.value = inp.value.replace(/(^|\s)[@%][\p{L}\d_.-]+(?=\s|$)/gu, '$1').replace(/\s+/g, ' '); drawOpts(); }, kb);
       if (c === 'assignee') pickAssignee(mm.project_id, mm.assignee, (v) => { st.assignee = v; st.set.assignee = true; drawOpts(); }, kb);
+      if (c === 'delegate') qDelegate();
     });
+  };
+  // Delegar desde la creación: chip «Delegar», Alt + W o >persona al escribir
+  const qDelegate = () => {
+    expanded = true;
+    pickDelegate(merged().waiting_for, (v) => {
+      st.waiting_for = v; st.set.waiting_for = true;
+      inp.value = inp.value.replace(/(^|\s)>[\p{L}\d_.'-]+(?=\s|$)/gu, '$1').replace(/\s+/g, ' ').replace(/^\s/, '');
+      drawOpts(); setTimeout(() => inp.focus(), 30);
+    }, true);
   };
   const drawPhotos = () => { $('#qa-ph', sh).innerHTML = st.photos.map((b) => `<img src="${URL.createObjectURL(b)}" alt="">`).join(''); };
   // Sugerencias tras #, /, @, %, + o {
   const drawSugg = () => {
     const box = $('#qa-sug', sh), upto = inp.value.slice(0, inp.selectionStart);
-    const m = upto.match(/(^|\s)([#/@%+])([^\s#@%+{}]*)$/u) || upto.match(/(\{)([^}]*)$/) && ['', '', '{', upto.match(/\{([^}]*)$/)[1]];
+    const m = upto.match(/(^|\s)([#/@%+>])([^\s#@%+>{}]*)$/u) || upto.match(/(\{)([^}]*)$/) && ['', '', '{', upto.match(/\{([^}]*)$/)[1]];
     if (!m) { box.hidden = true; sugg = []; trig = null; return; }
     trig = { sym: m[2], q: m[3], start: upto.length - m[3].length - 1 };
     sugg = quickSuggestions(trig.sym, trig.q, { project_id: merged().project_id }).slice(0, 8);
@@ -1226,6 +1241,7 @@ function openQuick(defaults) {
     if (s === '/') { st.section = x.v; st.set.section = true; }
     if (s === '@' || s === '%') { if (!st.contexts.includes(x.v)) st.contexts.push(x.v); }
     if (s === '+') { st.assignee = x.v; st.set.assignee = true; }
+    if (s === '>') { st.waiting_for = x.v; st.set.waiting_for = true; }
     if (s === '{') { st.deadline = x.v; st.set.deadline = true; }
     const caret = Math.min(trig.start, inp.value.length);
     expanded = true; sel = 0; trig = null; $('#qa-sug', sh).hidden = true;
@@ -1248,17 +1264,18 @@ function openQuick(defaults) {
       assignee_id: pid && membersOf(pid).some((x) => x.user_id === m.assignee) ? m.assignee : null,
       status: 'open', priority: m.priority || 4, title: (m.p.title || raw).slice(0, 500), notes: '',
       start_date: null, due_date: m.due_date, due_time: m.due_date ? m.due_time : null, deadline: m.deadline, recur: null, reminder: null,
-      contexts: m.contexts, energy: null, estimate: null, waiting_for: null, waiting_since: null,
+      contexts: m.contexts, energy: null, estimate: null, waiting_for: m.waiting_for || null, waiting_since: m.waiting_for ? today() : null,
       subtasks: [], photos: [], created_on: today(), completed_at: null, completed_by: null, focus_min: 0, source: 'app', needs_parse: false,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     };
     row.inbox = !row.project_id && !row.due_date;
+    if (row.waiting_for) { row.status = 'waiting'; row.inbox = false; }
     ins('tasks', row);
     for (const b of st.photos) addPhoto(row.id, b);
     FOCUS = row.id;
     closeSheet(); render();
-    const where = row.project_id ? PJ(row.project_id).name : row.inbox ? 'Bandeja' : fmtDate(row.due_date);
-    toast('Añadida a ' + where + (wide() ? ' · T fecha · V proyecto · Y prioridad' : ''), 'Abrir', () => openTask(row.id));
+    const where = row.project_id ? PJ(row.project_id).name : row.inbox ? 'Bandeja' : row.due_date ? fmtDate(row.due_date) : 'En espera';
+    toast((row.waiting_for ? `Delegada a ${row.waiting_for} · ` : '') + 'Añadida a ' + where + (wide() ? ' · T fecha · V proyecto · W delegar' : ''), 'Abrir', () => openTask(row.id));
   };
   $('#qa-add', sh).onclick = add;
   inp.onkeydown = (e) => {
@@ -1266,6 +1283,7 @@ function openQuick(defaults) {
     if (open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); sel = (sel + (e.key === 'ArrowDown' ? 1 : sugg.length - 1)) % sugg.length; drawSugg(); return; }
     if (open && (e.key === 'Enter' || e.key === 'Tab') && !e.isComposing) { e.preventDefault(); pickSugg(sel); return; }
     if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); add(); return; }
+    if (e.altKey && e.code === 'KeyW') { e.preventDefault(); box.hidden = true; sugg = []; qDelegate(); return; }
     if (e.key === 'Escape') { e.preventDefault(); if (open) { box.hidden = true; sugg = []; } else closeSheet(); }
   };
   inp.focus(); setTimeout(() => inp.focus(), 60);
@@ -1273,6 +1291,47 @@ function openQuick(defaults) {
 function pickAssignee(pid, cur, cb, kb) {
   if (!pid || membersOf(pid).length < 2) { toast('Solo se puede asignar en proyectos compartidos'); return; }
   openPop({ title: 'Asignar a', kb, items: [{ label: 'Nadie', v: null, icon: I.close, sel: !cur }, ...membersOf(pid).map((m) => ({ label: m.user_id === ME ? 'Yo' : m.display_name || 'Miembro', v: m.user_id, icon: I.user, sel: cur === m.user_id }))], onPick: (it) => cb(it.v) });
+}
+// Personas a las que se ha delegado antes (las más recientes primero) y miembros de los proyectos compartidos
+function delegates() {
+  const seen = new Map();
+  [...S.tasks].filter((t) => t.waiting_for && t.user_id === ME).sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))
+    .forEach((t) => { const n = String(t.waiting_for).trim(); if (n && !seen.has(norm(n))) seen.set(norm(n), n); });
+  (S.members || []).forEach((m) => { const n = m.user_id !== ME && String(m.display_name || '').trim(); if (n && !seen.has(norm(n))) seen.set(norm(n), n); });
+  return [...seen.values()];
+}
+// Selector «Delegar a»: se escribe el nombre (nuevo o conocido) y Enter; ↑ ↓ para elegir uno de la lista
+function pickDelegate(cur, cb, kb = true) {
+  const p = $('#pop'); p.hidden = false; p.className = kb ? 'kb' : '';
+  const people = delegates();
+  POPK = { i: 0, draw: null, items: [] };
+  p.innerHTML = `<div class="pop-h"><span>Delegar a</span></div><input class="field pop-search" placeholder="¿A quién se lo delegas?" maxlength="80" autocomplete="off" enterkeyhint="done"><div class="pop-list"></div>`;
+  const inp = $('.pop-search', p);
+  const draw = (q = '') => {
+    const t = q.trim(), nq = norm(t);
+    const l = people.filter((n) => !nq || norm(n).includes(nq)).slice(0, 8).map((n) => ({ label: n, v: n, icon: I.user, sel: !!cur && norm(cur) === norm(n) }));
+    if (t && !people.some((n) => norm(n) === nq)) l.unshift({ label: `Delegar a «${t}»`, v: t, icon: I.hourglass });
+    if (cur && !t) l.push({ label: 'Quitar delegación', v: null, icon: I.close });
+    POPK.items = l; if (POPK.i >= l.length) POPK.i = 0;
+    $('.pop-list', p).innerHTML = l.map((it, n) => `<button class="pop-i${it.sel ? ' sel' : ''}${n === POPK.i ? ' kfocus' : ''}" data-n="${n}">${it.icon}<span>${esc(it.label)}</span>${it.sel ? '<span class="tick">✓</span>' : ''}</button>`).join('') || '<div class="hint" style="padding:8px">Escribe el nombre y pulsa Enter</div>';
+    $$('.pop-i', p).forEach((b) => b.onclick = () => { const it = l[Number(b.dataset.n)]; closePop(); cb(it.v ? String(it.v).trim().slice(0, 80) : null); });
+  };
+  POPK.draw = draw;
+  inp.oninput = () => { POPK.i = 0; draw(inp.value); };
+  draw();
+  inp.focus();
+  setTimeout(() => document.addEventListener('pointerdown', popOutside, true), 0);
+}
+// Delegar una tarea ya creada (detalle, tecla W o Alt + W)
+function delegateTask(id) {
+  const t = S.tasks.find((x) => x.id === id); if (!t) return;
+  pickDelegate(t.status === 'waiting' ? t.waiting_for : null, (v) => {
+    const cur = S.tasks.find((x) => x.id === id); if (!cur) return;
+    if (v) upd('tasks', id, { status: 'waiting', waiting_for: v, waiting_since: cur.status === 'waiting' && cur.waiting_since ? cur.waiting_since : today(), inbox: false });
+    else upd('tasks', id, { status: 'open', waiting_for: null, waiting_since: null });
+    render(); refreshSheet();
+    toast(v ? `Delegada a ${v}` : 'Ya no está delegada');
+  }, true);
 }
 // Las cajas de texto crecen con su contenido para que siempre se lea todo
 function autoGrow(el) { if (!el) return; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }
@@ -1300,7 +1359,7 @@ function openTask(id) {
         <div class="kv"><span class="k">${I.flag}</span><span class="lab">Prioridad</span><span class="grow"><div class="prio-picker">${[1, 2, 3, 4].map((n) => `<button data-p="${n}" class="${t.priority === n ? 'on' : ''}">${n < 4 ? 'P' + n : '—'}</button>`).join('')}</div></span></div>
         <div class="kv"><span class="k">${I.at}</span><span class="lab">Contexto</span><span class="grow"><button class="v" data-pick="ctx">${(t.contexts || []).length ? t.contexts.map((c) => '@' + esc(c)).join(' ') : '<span class="ph">Ninguno</span>'}</button></span></div>
         <div class="kv"><span class="k">${I.wait}</span><span class="lab">Estado</span><span class="grow"><select data-f="status">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${t.status === k ? 'selected' : ''}>${v}</option>`).join('')}</select></span></div>
-        ${t.status === 'waiting' ? `<div class="kv"><span class="k">${I.user}</span><span class="lab">Espero a</span><span class="grow"><input data-f="waiting_for" value="${esc(t.waiting_for || '')}" placeholder="Persona"></span></div>` : ''}
+        <div class="kv"><span class="k">${I.hourglass.replace('<svg', '<svg class="ic"')}</span><span class="lab">Delegada a</span><span class="grow"><button class="v" data-pick="delegate" title="Delegar (W)">${t.status === 'waiting' ? esc(t.waiting_for || 'Escribir a quién') + (t.waiting_since ? ` <span class="ph">· ${Math.max(0, diffDays(today(), t.waiting_since))} d</span>` : '') : '<span class="ph">Delegar</span>'}</button></span></div>
         ${shared ? `<div class="kv"><span class="k">${I.user}</span><span class="lab">Asignada a</span><span class="grow"><select data-f="assignee_id"><option value="">Nadie</option>${membersOf(t.project_id).map((m) => `<option value="${m.user_id}" ${t.assignee_id === m.user_id ? 'selected' : ''}>${esc(m.user_id === ME ? 'Yo' : m.display_name || 'Miembro')}</option>`).join('')}</select></span></div>` : ''}
       </div>
       <details class="card" style="padding:0 12px" ${t.recur || t.reminder || t.start_date || t.estimate || t.energy ? 'open' : ''}><summary class="kv" style="cursor:pointer;list-style:none"><span class="k">${I.dots.replace('<svg', '<svg class="ic"')}</span><span class="lab" style="width:auto">Más opciones</span></summary>
@@ -1333,7 +1392,7 @@ function openTask(id) {
       const f = el.dataset.f; let v = el.value || null;
       if (f === 'estimate') v = v ? Number(v) : null;
       const patch = { [f]: v };
-      if (f === 'status') { patch.status = v || 'open'; if (v === 'waiting' && !t.waiting_since) patch.waiting_since = today(); if (v === 'done') { toggleDone(id); return; } if (v !== 'open') patch.inbox = false; }
+      if (f === 'status') { patch.status = v || 'open'; if (v === 'waiting' && !t.waiting_since) patch.waiting_since = today(); if (v === 'done') { toggleDone(id); return; } if (v !== 'open') patch.inbox = false; if (v === 'waiting' && !t.waiting_for) { save(patch); draw(); delegateTask(id); return; } }
       if (f === 'section') patch.section = v;
       save(patch); if (['status', 'recur'].includes(f)) draw();
     });
@@ -1344,6 +1403,7 @@ function openTask(id) {
       if (k === 'due') pickDate('Fecha', t.due_date, (v) => { save({ due_date: v, due_time: v ? t.due_time : null, inbox: v ? false : t.inbox }); draw(); });
       if (k === 'deadline') pickDate('Fecha límite', t.deadline, (v) => { save({ deadline: v }); draw(); });
       if (k === 'ctx') pickContexts(t.contexts, (v) => { save({ contexts: v }); draw(); });
+      if (k === 'delegate') delegateTask(id);
     });
     const subs = () => (S.tasks.find((x) => x.id === id).subtasks || []).map((s) => Object.assign({}, s));
     $$('[data-si]', sh).forEach((b) => b.onclick = () => { const s = subs(); s[b.dataset.si].done = !s[b.dataset.si].done; save({ subtasks: s }); draw(); });
@@ -1468,7 +1528,7 @@ function openClarify(ids) {
       if (a === 'next') finish(ids ? { status: 'open', due_date: null, due_time: null } : { status: 'open' });
       if (a === 'two') { finish({ status: 'done', completed_at: new Date().toISOString(), completed_by: ME }); }
       if (a === 'date') pickDate('Fecha', null, (v) => finish({ due_date: v, status: 'open' }));
-      if (a === 'wait') { const w = prompt('¿De quién esperas respuesta?'); if (w !== null) finish({ status: 'waiting', waiting_for: w.trim() || null, waiting_since: today() }); }
+      if (a === 'wait') pickDelegate(null, (w) => { if (w) finish({ status: 'waiting', waiting_for: w, waiting_since: today() }); }, true);
       if (a === 'someday') finish({ status: 'someday' });
       if (a === 'del') { del('tasks', t.id); handled.add(t.id); done++; render(); draw(); }
     });
@@ -1957,6 +2017,7 @@ function taskKey(e, id) {
   else if (!sh && ['1', '2', '3', '4'].includes(k)) save({ priority: Number(k) });
   else if (!sh && K === 'l') pickContexts(t.contexts, (v) => save({ contexts: v }));
   else if (sh && K === 'r') pickAssignee(t.project_id, t.assignee_id, (v) => save({ assignee_id: v }));
+  else if (!sh && K === 'w') delegateTask(id);
   else if (!sh && K === 'e') toggleDone(id);
   else if (!sh && k === 'Enter') { if (!(sheetCtx && sheetCtx.taskId === id)) openTask(id); }
   else return false;
@@ -1971,6 +2032,12 @@ function bindKeys() {
     if (mod && K === 'k') { e.preventDefault(); openSearch(); return; }
     // Detalle abierto: Ctrl/Cmd + Enter guarda y cierra
     if (mod && k === 'Enter' && sheetCtx && sheetCtx.taskId) { e.preventDefault(); if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); closeSheet(); return; }
+    // Alt + W: delegar la tarea abierta o seleccionada, también mientras se escribe en ella
+    if (e.altKey && e.code === 'KeyW' && !e.defaultPrevented && !mod) {
+      const id = sheetOpen() ? sheetCtx && sheetCtx.taskId : FOCUS;
+      if (id && S.tasks.some((x) => x.id === id)) { e.preventDefault(); if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); delegateTask(id); }
+      return;
+    }
     if (e.target.closest && e.target.closest('input,textarea,select,[contenteditable]')) return;
     if (e.altKey) return;
     if (k === 'Escape') { if (!$('#overlay').hidden) closeOverlay(); else if (sheetOpen()) closeSheet(); else if (!$('#drawer').hidden && !pinnedNow()) closeDrawer(); else setFocus(null); return; }
@@ -2000,8 +2067,8 @@ function bindKeys() {
   });
 }
 const SHORTCUTS = [
-  ['Crear tareas', [['Q / A', 'Añadir tarea'], ['#', 'Proyecto (al escribir)'], ['/', 'Sección'], ['@ o %', 'Contexto'], ['+', 'Asignar a alguien (proyecto compartido)'], ['p1 – p4', 'Prioridad'], ['mañana 10:00', 'Fecha y hora en lenguaje natural'], ['{viernes}', 'Fecha límite'], ['Enter', 'Guardar la tarea'], ['↑ ↓ y Tab', 'Elegir una sugerencia']]],
-  ['Tarea seleccionada o abierta', [['T', 'Poner fecha'], ['Shift + T', 'Quitar la fecha'], ['Shift + D', 'Fecha límite (propio de Summit)'], ['V', 'Mover a proyecto'], ['Y', 'Cambiar prioridad'], ['1 – 4', 'Prioridad directa'], ['L', 'Contextos'], ['Shift + R', 'Asignar'], ['E', 'Completar'], ['Enter', 'Abrir la tarea'], ['Ctrl/⌘ + Enter', 'Guardar y cerrar'], ['Ctrl/⌘ + Supr', 'Eliminar'], ['Esc', 'Cerrar']]],
+  ['Crear tareas', [['Q / A', 'Añadir tarea'], ['#', 'Proyecto (al escribir)'], ['/', 'Sección'], ['@ o %', 'Contexto'], ['+', 'Asignar a alguien (proyecto compartido)'], ['>persona', 'Delegar (>Ana_López para nombres con espacio)'], ['Alt + W', 'Delegar mientras escribes'], ['p1 – p4', 'Prioridad'], ['mañana 10:00', 'Fecha y hora en lenguaje natural'], ['{viernes}', 'Fecha límite'], ['Enter', 'Guardar la tarea'], ['↑ ↓ y Tab', 'Elegir una sugerencia']]],
+  ['Tarea seleccionada o abierta', [['T', 'Poner fecha'], ['Shift + T', 'Quitar la fecha'], ['Shift + D', 'Fecha límite (propio de Summit)'], ['V', 'Mover a proyecto'], ['Y', 'Cambiar prioridad'], ['1 – 4', 'Prioridad directa'], ['L', 'Contextos'], ['Shift + R', 'Asignar'], ['W o Alt + W', 'Delegar (propio de Summit)'], ['E', 'Completar'], ['Enter', 'Abrir la tarea'], ['Ctrl/⌘ + Enter', 'Guardar y cerrar'], ['Ctrl/⌘ + Supr', 'Eliminar'], ['Esc', 'Cerrar']]],
   ['Navegación', [['J / K o ↑ ↓', 'Moverse entre tareas'], ['M', 'Mostrar, ocultar o fijar el menú'], ['/ · F · Ctrl/⌘ + K', 'Buscar'], ['H o G → T', 'Hoy'], ['G → I', 'Bandeja de entrada'], ['G → U', 'Próximos'], ['G → P', 'Proyectos'], ['G → A', 'Estadísticas'], ['G → F', 'Enfoque'], ['O → S', 'Ajustes'], ['O → T', 'Cambiar tema'], ['?', 'Esta ayuda']]],
 ];
 function openShortcuts() {
