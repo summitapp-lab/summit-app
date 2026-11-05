@@ -530,3 +530,49 @@ body.pinned #toast.low{top:auto;bottom:24px}
 .tour-x{position:absolute;top:8px;right:8px;width:32px;height:32px;border-radius:50%;background:var(--surface2);color:var(--ink);display:grid;place-items:center}
 .tour-x svg{width:16px;height:16px}
 .tour-nav{margin-right:-30px}
+
+/* Matriz Eisenhower: clasificar a mano (1.8.0) */
+.mx-axes{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:2px 0 5px;font:600 10.5px Figtree;letter-spacing:.07em;text-transform:uppercase;color:var(--ink3);text-align:center}
+.matrix .quad{border-top:3px solid var(--qc);transition:background .15s,box-shadow .15s}
+.quad h3 .count,.mx-tray-h .count{margin-left:auto;font:500 11.5px Plex,monospace;color:var(--ink3)}
+.mx-tray-h .count{margin-left:0}
+.quad.over,.mx-tray.over{background:var(--surface2);background:color-mix(in srgb,var(--qc,var(--sage)) 12%,var(--surface));box-shadow:inset 0 0 0 2px var(--qc,var(--sage))}
+.mx-item{display:flex;align-items:center;gap:2px;border-radius:8px;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+.mx-item>.task{flex:1;min-width:0}
+.mx-move{flex:none;width:32px;height:32px;display:grid;place-items:center;border-radius:8px;color:var(--ink3)}
+.mx-move:active,.mx-move:hover{background:var(--surface2);color:var(--ink)}
+.mx-move .ic{width:15px;height:15px}
+.mx-dragging{opacity:.3}
+.mx-ghost{position:fixed;left:0;top:0;z-index:90;pointer-events:none;background:var(--surface);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.2);padding:0 8px;opacity:.97}
+body.mx-noselect{-webkit-user-select:none;user-select:none;cursor:grabbing}
+.mx-drop{border:1.5px dashed var(--line2);border-radius:8px;padding:16px 6px;text-align:center;color:var(--ink3);font-size:12px;margin-top:4px}
+.mx-tray{--qc:var(--sage);background:var(--surface);border:1.5px dashed var(--line2);border-radius:var(--radius);padding:9px 10px 4px;margin-bottom:10px;transition:background .15s,box-shadow .15s}
+.mx-tray .mx-list{max-height:36vh;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.mx-tray-h{display:flex;align-items:center;gap:8px;font-size:13.5px;margin-bottom:2px}
+.mx-tray-h .muted{margin-left:auto;font-size:11.5px;display:flex;align-items:center;gap:4px}
+.mx-seg{display:flex;background:var(--surface2);border-radius:10px;padding:3px;gap:3px}
+.mx-seg button{flex:1;padding:7px 8px;border-radius:8px;font-weight:600;font-size:13px;color:var(--ink2);text-align:center}
+.mx-seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.mx-seg b{font:500 11.5px Plex,monospace;color:var(--ink3);margin-left:6px}
+.mx-card{background:var(--surface2);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:7px;min-height:118px}
+.mx-pj{font-size:12.5px;color:var(--ink2);display:flex;align-items:center;gap:6px}
+.mx-notes{font-size:13.5px;color:var(--ink2);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.mx-now{font-size:12px;color:var(--ink3);margin-top:auto}
+.mx-pick{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.mx-pick button{position:relative;text-align:left;padding:13px 12px 12px;border-radius:14px;background:var(--surface);border:1.5px solid var(--line);border-top:4px solid var(--qc);display:flex;flex-direction:column;gap:2px;min-height:80px;transition:transform .08s}
+.mx-pick button b{font:700 16px Bricolage,Figtree,sans-serif;color:var(--ink)}
+.mx-pick button small{font-size:11.5px;color:var(--ink3)}
+.mx-pick .k{position:absolute;top:9px;right:11px;font:500 11px Plex,monospace;color:var(--ink3)}
+.mx-pick button.sug{border-style:dashed;border-color:var(--qc);border-top-style:solid}
+.mx-pick button.cur{background:var(--surface2);background:color-mix(in srgb,var(--qc) 14%,var(--surface));border-color:var(--qc)}
+.mx-pick button:active{transform:scale(.97)}
+.small-actions button:disabled{opacity:.4}
+.mx-sum{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.mx-sum div{border-radius:10px;background:var(--surface2);padding:9px 8px;border-top:3px solid var(--qc);display:flex;flex-direction:column;gap:1px}
+.mx-sum b{font:700 20px Bricolage,Figtree,sans-serif}
+.mx-sum span{font-size:11.5px;color:var(--ink3)}
+.rev-line{display:flex;align-items:center;gap:8px}
+.rev-line .rev-i{flex:1;min-width:0}
+.quad .t-title{overflow-wrap:break-word;word-break:normal;-webkit-hyphens:auto;hyphens:auto}
+.quad .mx-move{width:26px}
+.quad .task{gap:8px}

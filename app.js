@@ -2,7 +2,7 @@
    PWA sin dependencias de compilación. Datos en Supabase (esquema `summit`), con caché local
    y cola de cambios para funcionar sin conexión. */
 'use strict';
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.8.0';
 const CFG = window.SUMMIT_CONFIG || {};
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -153,6 +153,13 @@ function applySec(list, op) {
   else if (op.a === 'move') { const i = l.indexOf(op.s), j = i + (op.dir < 0 ? -1 : 1); if (i >= 0 && j >= 0 && j < l.length) [l[i], l[j]] = [l[j], l[i]]; }
   return l;
 }
+// La clasificación de la matriz se guarda tarea a tarea dentro de los ajustes (settings.matrix),
+// así dos dispositivos que clasifican sin conexión suman sus cambios en lugar de pisarse.
+function mergeSettings(cur, op) {
+  const s = Object.assign({}, cur || {}, op.patch || {});
+  if (op.mx) { const m = Object.assign({}, (cur && cur.matrix) || {}); for (const [k, v] of Object.entries(op.mx)) { if (v) m[k] = v; else delete m[k]; } s.matrix = m; }
+  return s;
+}
 function applyLocal(op) {
   if (op.k === 'ins') {
     const arr = tableArr(op.t); if (!arr) return;
@@ -162,7 +169,7 @@ function applyLocal(op) {
     if (op.t === 'profiles') { if (S.profile) Object.assign(S.profile, op.patch); return; }
     const x = (tableArr(op.t) || []).find((r) => r.id === op.id); if (x) Object.assign(x, op.patch);
   } else if (op.k === 'set') {
-    if (S.profile) S.profile.settings = Object.assign({}, S.profile.settings || {}, op.patch);
+    if (S.profile) S.profile.settings = mergeSettings(S.profile.settings, op);
   } else if (op.k === 'sec') {
     const p = S.projects.find((r) => r.id === op.id); if (p) p.sections = applySec(p.sections, op);
   } else if (op.k === 'del') {
@@ -197,7 +204,7 @@ async function runOp(op) {
   else if (op.k === 'set') { // ajustes: se mezclan con lo que haya en el servidor (otros dispositivos)
     const cur = await sb.from('profiles').select('settings').eq('id', ME).maybeSingle();
     if (cur.error) throw cur.error;
-    r = await sb.from('profiles').update({ settings: Object.assign({}, (cur.data && cur.data.settings) || {}, op.patch), updated_at: new Date().toISOString() }).eq('id', ME);
+    r = await sb.from('profiles').update({ settings: mergeSettings((cur.data && cur.data.settings) || {}, op), updated_at: new Date().toISOString() }).eq('id', ME);
   } else if (op.k === 'sec') {
     const cur = await sb.from('projects').select('sections').eq('id', op.id).maybeSingle();
     if (cur.error) throw cur.error;
@@ -564,6 +571,7 @@ function render() {
   $('#view').innerHTML = fn();
   addProcessButton();
   bindView();
+  if (VIEW.name === 'matrix') bindMatrixDrag();
   if (VIEW.secEdit) { if (typing != null && $('#sec-input')) $('#sec-input').value = typing; bindSecInput(); }
   if (VIEW.name === 'focus') tickPomo();
   if (!$('#drawer').hidden) renderDrawer();
@@ -745,10 +753,16 @@ const VIEWS = {
     return head('Registro') + (t.length ? Object.keys(by).sort().reverse().map((d) => group(fmtDate(d) + (diffDays(today(), d) > 1 ? ' · ' + longDate(d) : ''), by[d], { log: true })).join('') : empty('Aún no has completado nada'));
   },
   matrix() {
-    const soon = addDays(today(), 2), t = S.tasks.filter((x) => isOpen(x) && mine(x) && x.status === 'open' && !x.inbox);
-    const urg = (x) => (x.due_date && x.due_date <= soon) || (x.deadline && x.deadline <= soon), imp = (x) => x.priority <= 2;
-    const q = (title, sub, color, l) => `<div class="quad"><h3><i class="pdot" style="background:${color}"></i>${title}</h3><small>${sub} · ${l.length}</small>${l.slice(0, 12).map((x) => row(x, { noProject: true })).join('')}</div>`;
-    return head('Matriz Eisenhower') + `<div class="matrix">${q('Hacer ya', 'Urgente e importante', 'var(--red)', t.filter((x) => urg(x) && imp(x)))}${q('Planificar', 'Importante', 'var(--sage)', t.filter((x) => !urg(x) && imp(x)))}${q('Delegar', 'Urgente', 'var(--amber)', t.filter((x) => urg(x) && !imp(x)))}${q('Más tarde', 'Ni urgente ni importante', 'var(--ink3)', t.filter((x) => !urg(x) && !imp(x)))}</div><p class="hint">Importante = prioridad 1 o 2. Urgente = fecha o límite en los próximos 2 días.</p>`;
+    setTimeout(mxPrune, 0);
+    const t = matrixTasks(), un = t.filter((x) => !quadOf(x)).sort(sortTasks);
+    const item = (x) => `<div class="mx-item" data-mx="${x.id}">${row(x, { noProject: true })}<button class="mx-move" data-act="mxmove" data-id="${x.id}" aria-label="Mover de cuadrante">${GRID}</button></div>`;
+    const quad = (Q) => { const l = t.filter((x) => quadOf(x) === Q.q).sort(sortTasks); return `<div class="quad" data-quad="${Q.q}" style="--qc:${Q.color}"><h3><i class="pdot" style="background:${Q.color}"></i>${Q.name}<span class="count">${l.length}</span></h3><small>${Q.sub}</small><div class="mx-list">${l.map(item).join('') || '<div class="mx-drop">Suelta aquí</div>'}</div></div>`; };
+    const sub = un.length ? `${un.length} por clasificar` : t.length ? 'Todo clasificado' : '';
+    if (!t.length) return head('Matriz Eisenhower') + empty('No hay próximas acciones', 'Cuando tengas tareas abiertas podrás clasificarlas aquí.');
+    return head('Matriz Eisenhower', sub, `<button class="btn primary small" data-act="mxsort">${GRID}Clasificar</button>`) +
+      (un.length ? `<div class="mx-tray" data-quad="0"><div class="mx-tray-h"><b>Por clasificar</b><span class="count">${un.length}</span><span class="muted">Arrástralas o toca ${GRID}</span></div><div class="mx-list">${un.map(item).join('')}</div></div>` : '') +
+      `<div class="mx-axes"><span>Urgente</span><span>No urgente</span></div><div class="matrix">${QUADS.map(quad).join('')}</div>` +
+      `<p class="hint">Mantén pulsada una tarea para arrastrarla a otro cuadrante (en el ordenador, arrástrala sin más o usa las teclas 1–4). El cuadrante fija la prioridad: Hacer ya = P1, Planificar = P2, Delegar = P3, Más tarde = P4.</p>`;
   },
   review() {
     const chk = settings().reviewChecks || {}, rv = settings().reviews || [];
@@ -756,14 +770,17 @@ const VIEWS = {
     const items = [
       ['Obtener claridad', [['r1', 'Recoger papeles, notas y apuntes sueltos'], ['r2', 'Procesar la bandeja de entrada', `${inboxTasks().length} pendientes`], ['r3', 'Vaciar la cabeza: anotar todo lo que te preocupa']]],
       ['Ponerse al día', [['r4', 'Revisar la lista de próximas acciones', `${S.tasks.filter(actionable).length} acciones`], ['r5', 'Revisar el calendario de la semana pasada'], ['r6', 'Revisar el calendario de las próximas dos semanas'], ['r7', 'Revisar la lista En espera', `${S.tasks.filter((x) => x.status === 'waiting' && x.user_id === ME).length} elementos`], ['r8', 'Revisar cada proyecto activo', `${projs.length} proyectos`]]],
+      ['Priorizar', [['r11', 'Clasificar las tareas en la matriz Eisenhower', `${mxPending().length} por revisar`, '<button class="btn small" data-act="mxsort" data-from="review">Clasificar</button>']]],
       ['Ser creativo', [['r9', 'Revisar Algún día / Quizás', `${S.tasks.filter((x) => x.status === 'someday' && mine(x)).length} ideas`], ['r10', 'Anotar ideas y proyectos nuevos']]],
     ];
-    const total = 10, done = Object.values(chk).filter(Boolean).length;
+    const total = 11, done = Object.values(chk).filter(Boolean).length;
+    const q2 = matrixTasks().filter((x) => quadOf(x) === 2).sort(sortTasks);
     const noNext = projs.filter((p) => !S.tasks.some((t) => t.project_id === p.id && t.status === 'open' && isOpen(t)));
     const due = projs.filter((p) => !p.last_review || diffDays(today(), p.last_review) >= (p.review_every || 7));
     return head('Revisión semanal', 'Última: ' + (rv.length ? esc(fmtDate(rv[rv.length - 1]).toLowerCase()) : 'nunca')) +
-      `<div class="card rev"><div class="bar"><i style="width:${done / total * 100}%"></i></div>${items.map(([h, l]) => `<h3>${h}</h3>${l.map(([k, txt, c]) => `<label class="rev-i${chk[k] ? ' done' : ''}"><input type="checkbox" data-act="revcheck" data-k="${k}" ${chk[k] ? 'checked' : ''}><span>${txt}</span>${c ? `<span class="c">${c}</span>` : ''}</label>`).join('')}`).join('')}
+      `<div class="card rev"><div class="bar"><i style="width:${done / total * 100}%"></i></div>${items.map(([h, l]) => `<h3>${h}</h3>${l.map(([k, txt, c, btn]) => { const lb = `<label class="rev-i${chk[k] ? ' done' : ''}"><input type="checkbox" data-act="revcheck" data-k="${k}" ${chk[k] ? 'checked' : ''}><span>${txt}</span>${c ? `<span class="c">${c}</span>` : ''}</label>`; return btn ? `<div class="rev-line">${lb}${btn}</div>` : lb; }).join('')}`).join('')}
       <div style="margin-top:12px"><button class="btn primary" style="width:100%" data-act="revdone">✓ Marcar revisión como completada</button></div></div>` +
+      (q2.length ? group('Importante y no urgente · resérvale tiempo esta semana', q2) : '') +
       (noNext.length ? `<div class="group"><div class="group-h red">Proyectos sin próxima acción <span class="count">${noNext.length}</span></div><div class="rows">${noNext.map(projRow).join('')}</div></div>` : '') +
       (due.length ? `<div class="group"><div class="group-h">Proyectos por revisar <span class="count">${due.length}</span></div><div class="rows">${due.map(projRow).join('')}</div></div>` : '');
   },
@@ -867,6 +884,8 @@ const ACT = {
   revcheck: (d, el) => { const c = Object.assign({}, settings().reviewChecks || {}); c[d.k] = el.checked; saveSettings({ reviewChecks: c }); render(); },
   revdone: () => { const rv = (settings().reviews || []).filter((x) => x !== today()); rv.push(today()); saveSettings({ reviews: rv.slice(-60), reviewChecks: {} }); for (const p of activeProjects()) if (p.owner_id === ME) upd('projects', p.id, { last_review: today() }); toast('Revisión semanal completada. Buen trabajo.'); render(); },
   join: () => joinProject(),
+  mxsort: (d) => openMatrixSort(d.from === 'review'),
+  mxmove: (d) => { const t = S.tasks.find((x) => x.id === d.id); if (!t) return; const cur = quadOf(t); openPop({ title: 'Mover a', items: QUADS.map((Q) => ({ label: Q.name, k: String(Q.q), v: Q.q, sel: cur === Q.q, icon: `<i class="pdot" style="background:${Q.color};margin-right:8px"></i>` })).concat(cur ? [{ label: 'Quitar de la matriz', v: 0 }] : []), onPick: (it) => mxDrop(t.id, it.v) }); },
   newproj: () => editProject(null),
   pmode: (d) => { VIEW.board = d.b === '1'; render(); },
   showdone: () => { VIEW.showDone = !VIEW.showDone; render(); },
@@ -1537,6 +1556,204 @@ function openClarify(ids) {
   draw();
 }
 
+/* ---------- Matriz Eisenhower: clasificar a mano ---------- */
+// El cuadrante es la prioridad de la tarea (P1 Hacer ya, P2 Planificar, P3 Delegar, P4 Más tarde).
+// settings.matrix guarda el día en que cada tarea se clasificó: sin fecha = «Por clasificar».
+const QUADS = [
+  { q: 1, name: 'Hacer ya', sub: 'Urgente · Importante', color: 'var(--red)' },
+  { q: 2, name: 'Planificar', sub: 'No urgente · Importante', color: 'var(--amber)' },
+  { q: 3, name: 'Delegar', sub: 'Urgente · No importante', color: 'var(--blue)' },
+  { q: 4, name: 'Más tarde', sub: 'Ni urgente ni importante', color: 'var(--ink3)' },
+];
+const GRID = '<svg class="ic" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>';
+const MX = () => settings().matrix || {};
+const matrixTasks = () => S.tasks.filter((x) => isOpen(x) && mine(x) && x.status === 'open' && !x.inbox);
+const quadOf = (t) => (MX()[t.id] ? Math.min(4, Math.max(1, t.priority || 4)) : 0);
+const mxPending = () => matrixTasks().filter((x) => !MX()[x.id] || diffDays(today(), MX()[x.id]) >= 7);
+function suggestQuad(t) { // solo orientativo: fecha o límite en 2 días = urgente; P1/P2 = importante
+  const soon = addDays(today(), 2), u = (t.due_date && t.due_date <= soon) || (t.deadline && t.deadline <= soon), i = t.priority <= 2;
+  return u && i ? 1 : i ? 2 : u ? 3 : 4;
+}
+const mxSet = (changes) => mut({ k: 'set', patch: {}, mx: changes });
+function setQuad(id, q) {
+  const t = S.tasks.find((x) => x.id === id); if (!t) return null;
+  const prev = { priority: t.priority, on: MX()[id] || null };
+  if (q) { if (t.priority !== q) upd('tasks', id, { priority: q }); mxSet({ [id]: today() }); }
+  else mxSet({ [id]: null });
+  return prev;
+}
+function restoreQuad(id, prev) {
+  const t = S.tasks.find((x) => x.id === id); if (!t || !prev) return;
+  if (t.priority !== prev.priority) upd('tasks', id, { priority: prev.priority });
+  mxSet({ [id]: prev.on });
+}
+function mxDrop(id, q) {
+  const t = S.tasks.find((x) => x.id === id); if (!t || q === quadOf(t)) return;
+  const prev = setQuad(id, q); render();
+  if (navigator.vibrate) navigator.vibrate(10);
+  toast(q ? `Movida a «${QUADS[q - 1].name}»` : 'Vuelve a «Por clasificar»', 'Deshacer', () => { restoreQuad(id, prev); render(); });
+}
+let mxPruned = false;
+function mxPrune() { // limpia las tareas ya completadas o borradas (una vez por sesión, solo si se acumulan)
+  if (mxPruned || !S.profile) return; mxPruned = true;
+  const m = MX(), open = new Set(S.tasks.filter(isOpen).map((t) => t.id));
+  const old = Object.keys(m).filter((id) => !open.has(id) && diffDays(today(), m[id]) > 3);
+  if (old.length >= 10) mxSet(Object.fromEntries(old.map((id) => [id, null])));
+}
+
+// Arrastrar: en el móvil, mantener pulsado y mover; con ratón, arrastrar directamente.
+function bindMatrixDrag() {
+  $$('#view .mx-item').forEach((el) => {
+    el.addEventListener('pointerdown', (e) => mxDown(e, el));
+    el.addEventListener('contextmenu', (e) => e.preventDefault());
+  });
+}
+function mxDown(e, el) {
+  if (e.button > 0 || (e.target.closest && e.target.closest('[data-check],[data-act],[data-veil]'))) return;
+  const touch = e.pointerType !== 'mouse', sx = e.clientX, sy = e.clientY, pid = e.pointerId;
+  let timer = null, d = null, lx = sx, ly = sy, raf = 0;
+  const place = () => {
+    if (!d) return;
+    d.g.style.transform = `translate(${lx - d.ox}px, ${ly - d.oy}px)`;
+    const hit = document.elementFromPoint(lx, ly), z = hit && hit.closest ? hit.closest('[data-quad]') : null;
+    if (z !== d.over) { if (d.over) d.over.classList.remove('over'); d.over = z; if (z) z.classList.add('over'); }
+  };
+  const loop = () => { // desplaza la pantalla al acercarse a los bordes
+    if (!d) return;
+    const h = window.innerHeight, dy = ly < 90 ? -12 : ly > h - 120 ? 12 : 0;
+    if (dy) { window.scrollBy(0, dy); place(); }
+    raf = requestAnimationFrame(loop);
+  };
+  const begin = () => {
+    timer = null;
+    const r = el.getBoundingClientRect(), g = el.cloneNode(true);
+    g.classList.add('mx-ghost'); g.style.width = r.width + 'px'; document.body.appendChild(g);
+    d = { g, ox: lx - r.left, oy: ly - r.top, over: null };
+    el.classList.add('mx-dragging'); document.body.classList.add('mx-noselect');
+    try { el.setPointerCapture(pid); } catch (_) {}
+    if (navigator.vibrate) navigator.vibrate(12);
+    place(); raf = requestAnimationFrame(loop);
+  };
+  const stopClick = (ev) => { ev.stopPropagation(); ev.preventDefault(); window.removeEventListener('click', stopClick, true); }; // solo el clic que genera el propio arrastre
+  const end = (drop) => {
+    clearTimeout(timer); cancelAnimationFrame(raf);
+    window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', cancel);
+    document.removeEventListener('touchmove', tmove, { passive: false });
+    if (!d) return;
+    const z = drop ? d.over : null;
+    d.g.remove(); el.classList.remove('mx-dragging'); document.body.classList.remove('mx-noselect');
+    if (d.over) d.over.classList.remove('over');
+    d = null;
+    window.addEventListener('click', stopClick, true); setTimeout(() => window.removeEventListener('click', stopClick, true), 120);
+    if (z) mxDrop(el.dataset.mx, Number(z.dataset.quad));
+  };
+  const move = (ev) => {
+    if (ev.pointerId !== pid) return;
+    lx = ev.clientX; ly = ev.clientY;
+    if (!d) { const dist = Math.hypot(lx - sx, ly - sy); if (touch) { if (dist > 10) end(false); } else if (dist > 5) begin(); return; }
+    ev.preventDefault(); place();
+  };
+  const up = (ev) => { if (ev.pointerId === pid) end(true); };
+  const cancel = (ev) => { if (ev.pointerId === pid) end(false); };
+  const tmove = (ev) => { if (d) ev.preventDefault(); }; // mientras se arrastra, la página no se desplaza con el dedo
+  window.addEventListener('pointermove', move); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', cancel);
+  document.addEventListener('touchmove', tmove, { passive: false });
+  if (touch) timer = setTimeout(begin, 280);
+}
+
+// Clasificación rápida: una tarea cada vez y cuatro botones grandes (teclas 1–4).
+function openMatrixSort(fromReview = false) {
+  let mode = 'pend';
+  const hist = [], skipped = new Set(), counts = { 1: 0, 2: 0, 3: 0, 4: 0 };
+  const seen = () => new Set([...hist.map((h) => h.id), ...skipped]);
+  const order = (a, b) => String(MX()[a.id] || '').localeCompare(String(MX()[b.id] || '')) || sortTasks(a, b);
+  const pendSet = () => new Set(mxPending().map((x) => x.id));
+  const list = () => { const s = seen(), p = pendSet(); return matrixTasks().filter((x) => !s.has(x.id) && (mode === 'all' || p.has(x.id))).sort(order); };
+  const agoTxt = (d) => { const n = diffDays(today(), d); return n <= 0 ? 'hoy' : n === 1 ? 'ayer' : `hace ${n} días`; };
+  const close = () => { document.removeEventListener('keydown', onKey, true); closeSheet(); };
+  const draw = () => {
+    const sh = $('#sheet'), l = list(), t = l[0], pos = hist.length + skipped.size;
+    const nP = mxPending().length, nA = matrixTasks().length;
+    const seg = `<div class="mx-seg"><button class="${mode === 'pend' ? 'on' : ''}" data-m="pend">Por revisar<b>${nP}</b></button><button class="${mode === 'all' ? 'on' : ''}" data-m="all">Todas<b>${nA}</b></button></div>`;
+    if (!t) {
+      const n = hist.filter((h) => h.q).length, q2 = matrixTasks().filter((x) => quadOf(x) === 2).length;
+      if (fromReview && !mxPending().length) { const c = Object.assign({}, settings().reviewChecks || {}); if (!c.r11) { c.r11 = true; saveSettings({ reviewChecks: c }); } }
+      sh.innerHTML = `<div class="sheet-grab"></div><div class="sheet-head"><span style="flex:1"></span><button class="icon-btn" id="mx-x">${I.close}</button></div><div class="sheet-body" id="mx-sort">
+        ${seg}
+        <div style="text-align:center;padding:14px 4px 0"><div class="clarify-title">${n ? 'Matriz al día' : 'Nada por clasificar'}</div>
+        <p class="muted">${n ? `Has clasificado ${n} ${n === 1 ? 'tarea' : 'tareas'}${skipped.size ? ` y saltado ${skipped.size}` : ''}.` : mode === 'pend' ? 'Todas las tareas se han revisado en los últimos 7 días. Toca «Todas» para repasarlas igualmente.' : 'No quedan tareas en esta lista.'}</p></div>
+        ${n ? `<div class="mx-sum">${QUADS.map((Q) => `<div style="--qc:${Q.color}"><b>${counts[Q.q]}</b><span>${Q.name}</span></div>`).join('')}</div>` : ''}
+        ${q2 ? `<p class="hint" style="text-align:center">Tienes ${q2} ${q2 === 1 ? 'tarea importante y no urgente' : 'tareas importantes y no urgentes'}: ponles fecha o resérvales un hueco esta semana.</p>` : ''}
+        <div class="big-actions"><button class="btn" id="mx-see">${GRID} Ver la matriz</button><button class="btn primary" id="mx-ok">Listo</button></div></div>`;
+      $$('[data-m]', sh).forEach((b) => b.onclick = () => { mode = b.dataset.m; skipped.clear(); draw(); });
+      $('#mx-x', sh).onclick = close; $('#mx-ok', sh).onclick = close;
+      $('#mx-see', sh).onclick = () => { close(); go({ name: 'matrix' }); };
+      return;
+    }
+    const cur = quadOf(t), sug = cur ? 0 : suggestQuad(t), pj = PJ(t.project_id), hidden = veiled(t);
+    const tags = [];
+    if (t.due_date) tags.push(`<span class="date ${t.due_date < today() ? 'red' : t.due_date === today() ? 'today' : ''}">${esc(fmtDate(t.due_date))}</span>`);
+    if (t.deadline) tags.push(`<span class="date dl ${t.deadline < today() ? 'red' : ''}">⚑ ${esc(fmtDate(t.deadline))}</span>`);
+    for (const c of t.contexts || []) tags.push(`<span class="tag">@${esc(c)}</span>`);
+    sh.innerHTML = `<div class="sheet-grab"></div><div class="sheet-head"><span class="clarify-progress" style="flex:1">${pos + 1} de ${pos + l.length}</span><button class="icon-btn" id="mx-x">${I.close}</button></div>
+      <div class="sheet-body" id="mx-sort">
+        ${seg}
+        <div class="mx-card">
+          <div class="mx-pj">${pj ? `<i class="pdot" style="background:${esc(pj.color)}"></i>${esc(pj.name)}${t.section ? ' · ' + esc(t.section) : ''}` : 'Sin proyecto'}</div>
+          <div class="clarify-title">${esc(safeTitle(t))}</div>
+          ${tags.length ? `<div class="t-sub">${tags.join('')}</div>` : ''}
+          ${t.notes && !hidden ? `<div class="mx-notes">${esc(t.notes)}</div>` : ''}
+          <div class="mx-now">${cur ? `Ahora en <b style="color:${QUADS[cur - 1].color}">${QUADS[cur - 1].name}</b> · clasificada ${agoTxt(MX()[t.id])}` : 'Sin clasificar · el borde punteado es una sugerencia'}</div>
+        </div>
+        <div class="mx-axes"><span>Urgente</span><span>No urgente</span></div>
+        <div class="mx-pick">${QUADS.map((Q) => `<button data-q="${Q.q}" class="${cur === Q.q ? 'cur' : ''}${sug === Q.q ? ' sug' : ''}" style="--qc:${Q.color}"><span class="k">${Q.q}</span><b>${Q.name}</b><small>${Q.sub}</small></button>`).join('')}</div>
+        <div class="small-actions">
+          <button data-a="undo"${hist.length ? '' : ' disabled'}><svg class="ic" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg><span>Deshacer</span></button>
+          <button data-a="skip"><svg class="ic" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span>Saltar</span></button>
+          <button data-a="done">${I.done}<span>Ya está hecha</span></button>
+          <button data-a="someday">${I.cloud}<span>Algún día</span></button>
+        </div>
+        ${hoverOk() ? '<p class="hint" style="text-align:center">Teclas: 1–4 clasificar · S saltar · Z deshacer · E hecha</p>' : ''}
+      </div>`;
+    $$('[data-m]', sh).forEach((b) => b.onclick = () => { mode = b.dataset.m; skipped.clear(); draw(); });
+    $('#mx-x', sh).onclick = close;
+    $$('[data-q]', sh).forEach((b) => b.onclick = () => {
+      const q = Number(b.dataset.q), prev = setQuad(t.id, q);
+      hist.push({ id: t.id, q, prev }); counts[q]++;
+      if (navigator.vibrate) navigator.vibrate(8);
+      render(); draw();
+    });
+    $$('[data-a]', sh).forEach((b) => b.onclick = () => {
+      const a = b.dataset.a;
+      if (a === 'skip') { skipped.add(t.id); draw(); return; }
+      if (a === 'undo') {
+        const h = hist.pop(); if (!h) return;
+        if (h.q) { restoreQuad(h.id, h.prev); counts[h.q]--; }
+        else upd('tasks', h.id, { status: 'open', completed_at: null, completed_by: null });
+        render(); draw(); return;
+      }
+      if (a === 'done' && t.recur) { toggleDone(t.id); draw(); return; } // repetitiva: crea la siguiente y ofrece deshacer en el aviso
+      if (a === 'done') { hist.push({ id: t.id }); upd('tasks', t.id, { status: 'done', completed_at: new Date().toISOString(), completed_by: ME }); }
+      if (a === 'someday') { hist.push({ id: t.id }); upd('tasks', t.id, { status: 'someday' }); }
+      render(); draw();
+    });
+  };
+  const onKey = (e) => {
+    if (!sheetOpen() || !$('#mx-sort')) { document.removeEventListener('keydown', onKey, true); return; }
+    if (e.metaKey || e.ctrlKey || e.altKey || (e.target.closest && e.target.closest('input,textarea,select'))) return;
+    const k = e.key.toLowerCase(); let b = null;
+    if (['1', '2', '3', '4'].includes(k)) b = $(`#mx-sort [data-q="${k}"]`);
+    else if (k === 's' || k === 'arrowright') b = $('#mx-sort [data-a="skip"]');
+    else if (k === 'z' || k === 'backspace') b = $('#mx-sort [data-a="undo"]');
+    else if (k === 'e') b = $('#mx-sort [data-a="done"]');
+    else if (k === 'enter') b = $('#mx-ok');
+    if (b && !b.disabled) { e.preventDefault(); e.stopPropagation(); b.click(); }
+  };
+  openSheet('', { full: true, refresh: () => {} });
+  document.addEventListener('keydown', onKey, true);
+  draw();
+}
+
 /* ---------- Proyectos: crear, editar, compartir ---------- */
 function editProject(id) {
   const p = id ? PJ(id) : null;
@@ -2014,7 +2231,7 @@ function taskKey(e, id) {
   else if (sh && K === 'd') pickDate('Fecha límite', t.deadline, (v) => save({ deadline: v }));
   else if (!sh && K === 'v') pickProject(t.project_id, (v) => save({ project_id: v, section: null, inbox: !v && !t.due_date, assignee_id: null }));
   else if (!sh && K === 'y') pickPriority(t.priority, (v) => save({ priority: v }));
-  else if (!sh && ['1', '2', '3', '4'].includes(k)) save({ priority: Number(k) });
+  else if (!sh && ['1', '2', '3', '4'].includes(k)) { if (VIEW.name === 'matrix' && !sheetOpen() && matrixTasks().some((x) => x.id === id)) mxDrop(id, Number(k)); else save({ priority: Number(k) }); }
   else if (!sh && K === 'l') pickContexts(t.contexts, (v) => save({ contexts: v }));
   else if (sh && K === 'r') pickAssignee(t.project_id, t.assignee_id, (v) => save({ assignee_id: v }));
   else if (!sh && K === 'w') delegateTask(id);
@@ -2068,7 +2285,7 @@ function bindKeys() {
 }
 const SHORTCUTS = [
   ['Crear tareas', [['Q / A', 'Añadir tarea'], ['#', 'Proyecto (al escribir)'], ['/', 'Sección'], ['@ o %', 'Contexto'], ['+', 'Asignar a alguien (proyecto compartido)'], ['>persona', 'Delegar (>Ana_López para nombres con espacio)'], ['Alt + W', 'Delegar mientras escribes'], ['p1 – p4', 'Prioridad'], ['mañana 10:00', 'Fecha y hora en lenguaje natural'], ['{viernes}', 'Fecha límite'], ['Enter', 'Guardar la tarea'], ['↑ ↓ y Tab', 'Elegir una sugerencia']]],
-  ['Tarea seleccionada o abierta', [['T', 'Poner fecha'], ['Shift + T', 'Quitar la fecha'], ['Shift + D', 'Fecha límite (propio de Summit)'], ['V', 'Mover a proyecto'], ['Y', 'Cambiar prioridad'], ['1 – 4', 'Prioridad directa'], ['L', 'Contextos'], ['Shift + R', 'Asignar'], ['W o Alt + W', 'Delegar (propio de Summit)'], ['E', 'Completar'], ['Enter', 'Abrir la tarea'], ['Ctrl/⌘ + Enter', 'Guardar y cerrar'], ['Ctrl/⌘ + Supr', 'Eliminar'], ['Esc', 'Cerrar']]],
+  ['Tarea seleccionada o abierta', [['T', 'Poner fecha'], ['Shift + T', 'Quitar la fecha'], ['Shift + D', 'Fecha límite (propio de Summit)'], ['V', 'Mover a proyecto'], ['Y', 'Cambiar prioridad'], ['1 – 4', 'Prioridad directa (en la Matriz: cuadrante)'], ['L', 'Contextos'], ['Shift + R', 'Asignar'], ['W o Alt + W', 'Delegar (propio de Summit)'], ['E', 'Completar'], ['Enter', 'Abrir la tarea'], ['Ctrl/⌘ + Enter', 'Guardar y cerrar'], ['Ctrl/⌘ + Supr', 'Eliminar'], ['Esc', 'Cerrar']]],
   ['Navegación', [['J / K o ↑ ↓', 'Moverse entre tareas'], ['M', 'Mostrar, ocultar o fijar el menú'], ['/ · F · Ctrl/⌘ + K', 'Buscar'], ['H o G → T', 'Hoy'], ['G → I', 'Bandeja de entrada'], ['G → U', 'Próximos'], ['G → P', 'Proyectos'], ['G → A', 'Estadísticas'], ['G → F', 'Enfoque'], ['O → S', 'Ajustes'], ['O → T', 'Cambiar tema'], ['?', 'Esta ayuda']]],
 ];
 function openShortcuts() {
