@@ -1181,7 +1181,7 @@ function openQuick(defaults) {
   defaults = defaults || viewDefaults();
   // set: lo elegido a mano (chips o sugerencias) manda sobre lo escrito
   const st = { project_id: defaults.project_id || null, section: defaults.section || null, due_date: defaults.due_date || null, due_time: null, deadline: null, priority: 4, contexts: defaults.contexts || [], assignee: null, waiting_for: null, photos: [], set: {} };
-  let expanded = !!(st.project_id || st.due_date || st.contexts.length), sugg = [], sel = 0, trig = null;
+  let expanded = true, sugg = [], sel = 0, trig = null; // Proyecto y Contexto siempre visibles al crear: sin pulsar «Más» antes
   const sh = openSheet(`<div class="sheet-body" style="padding-top:14px">
       <textarea class="qa-input grow" id="qa-title" rows="1" placeholder="Nueva tarea" autocomplete="off" enterkeyhint="done" spellcheck="true"></textarea>
       <div class="suggest-box" id="qa-sug" hidden></div>
@@ -1206,8 +1206,6 @@ function openQuick(defaults) {
   };
   const drawOpts = () => {
     const o = $('#qa-opts', sh), m = merged();
-    if (m.p.tokens.length) expanded = true;
-    if (!expanded) { o.innerHTML = `<button class="qa-more" id="qa-more">··· Más</button>`; $('#qa-more', sh).onclick = () => { expanded = true; drawOpts(); }; return; }
     const p = m.project_id && PJ(m.project_id), shared = m.project_id && membersOf(m.project_id).length > 1;
     o.innerHTML = `<div class="qa-chips">
       <button class="qchip${p ? ' set' : ''}" data-c="project">${p ? `<i class="pdot" style="background:${esc(p.color)}"></i>${esc(p.name)}${m.section ? ' · ' + esc(m.section) : ''}` : I.inbox.replace('<svg', '<svg class="ic"') + 'Bandeja'}</button>
@@ -1514,15 +1512,18 @@ function openClarify(ids) {
     const t = list[0];
     const sh = $('#sheet');
     if (!t) { sh.innerHTML = `<div class="sheet-grab"></div><div class="sheet-body" style="text-align:center;padding:30px 16px 40px"><div class="clarify-title">${ids ? 'Lista procesada' : 'Bandeja vacía'}</div><p class="muted">${done ? `Has procesado ${done} ${done === 1 ? 'elemento' : 'elementos'}${skipped.size ? ` y saltado ${skipped.size}` : ''}.` : 'No queda nada por procesar.'}</p><button class="btn primary" id="cl-x">Cerrar</button></div>`; $('#cl-x', sh).onclick = closeSheet; return; }
-    const st = { project_id: t.project_id || null };
+    const st = { project_id: t.project_id || null, contexts: (t.contexts || []).slice() };
     const recent = activeProjects().slice(0, 12);
     if (t.project_id && PJ(t.project_id) && !recent.some((p) => p.id === t.project_id)) recent.unshift(PJ(t.project_id));
+    const ctxList = contexts();
     sh.innerHTML = `<div class="sheet-grab"></div><div class="sheet-head"><span class="clarify-progress" style="flex:1">${done + skipped.size + 1} de ${list.length + done + skipped.size}</span>${ids ? '<button class="btn small" id="cl-skip">Saltar</button>' : ''}<button class="icon-btn" id="cl-open" aria-label="Editar">${I.note.replace('class="ic"', '')}</button><button class="icon-btn" id="cl-x">${I.close}</button></div>
       <div class="sheet-body">
         <textarea class="d-title grow" id="cl-title" rows="1">${esc(t.title)}</textarea>
         ${t.notes ? `<div class="muted" style="font-size:14px">${esc(t.notes)}</div>` : ''}
         <div class="seclabel">Proyecto</div>
         <div class="chips" id="cl-proj"><button class="pill${st.project_id ? '' : ' on'}" data-p="">Sin proyecto</button>${recent.map((p) => `<button class="pill${p.id === st.project_id ? ' on' : ''}" data-p="${p.id}"><i class="pdot" style="background:${esc(p.color)};display:inline-block;margin-right:5px"></i>${esc(p.name)}</button>`).join('')}</div>
+        <div class="seclabel">Contexto</div>
+        <div class="chips" id="cl-ctx">${ctxList.length ? ctxList.map((c) => `<button class="pill${st.contexts.includes(c) ? ' on' : ''}" data-c="${esc(c)}">@${esc(c)}</button>`).join('') : `<span class="muted" style="font-size:13px">Sin contextos creados — añádelos en Ajustes → Áreas y contextos</span>`}</div>
         <div class="big-actions"><button class="btn primary" data-a="today">${SUN.replace('<svg', '<svg class="ic"')} Hoy</button><button class="btn" data-a="next">Próxima acción</button></div>
         <div class="small-actions">
           ${settings().twoMinute !== false ? `<button data-a="two">${I.done}<span>2 minutos: hecho</span></button>` : `<button data-a="date">${I.soon}<span>Con fecha</span></button>`}
@@ -1533,12 +1534,13 @@ function openClarify(ids) {
       </div>`;
     const ti = $('#cl-title', sh); autoGrow(ti); ti.onkeydown = (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); ti.blur(); } };
     $$('#cl-proj .pill', sh).forEach((b) => b.onclick = () => { $$('#cl-proj .pill', sh).forEach((x) => x.classList.remove('on')); b.classList.add('on'); st.project_id = b.dataset.p || null; });
+    $$('#cl-ctx .pill', sh).forEach((b) => b.onclick = () => { b.classList.toggle('on'); const c = b.dataset.c; st.contexts = st.contexts.includes(c) ? st.contexts.filter((x) => x !== c) : [...st.contexts, c]; });
     $('#cl-x', sh).onclick = closeSheet;
     $('#cl-open', sh).onclick = () => openTask(t.id);
     if (ids) $('#cl-skip', sh).onclick = () => { skipped.add(t.id); draw(); };
     const finish = (patch) => {
       const title = ti.value.trim() || t.title, moved = st.project_id !== (t.project_id || null);
-      upd('tasks', t.id, Object.assign({ title, inbox: false, project_id: st.project_id }, moved ? { section: null, assignee_id: null } : {}, patch));
+      upd('tasks', t.id, Object.assign({ title, inbox: false, project_id: st.project_id, contexts: st.contexts }, moved ? { section: null, assignee_id: null } : {}, patch));
       handled.add(t.id); done++; render(); draw();
     };
     $$('[data-a]', sh).forEach((b) => b.onclick = () => {

@@ -2,17 +2,17 @@
 
 Gestor de tareas personal basado en GTD (Getting Things Done). Es una PWA: se abre en el navegador, se instala en la pantalla de inicio del iPhone y funciona sin conexión.
 
-**Versión:** 1.8.0 · **Datos:** Supabase (proyecto «Summit» de la organización summitapp-lab) · **Web:** GitHub Pages
+**Versión:** 1.8.1 · **Datos:** Supabase (proyecto «Summit» de la organización summitapp-lab) · **Web:** GitHub Pages
 
 ## Funciones
 
-- Bandeja de entrada con procesado GTD en una sola pantalla (Hoy, Próxima acción, 2 minutos, Delegar, Algún día, Eliminar), y botón Procesar también en Hoy, Próximos, Calendario, Próximas acciones, En espera, Algún día, contextos, filtros, proyectos y Matriz (con «Saltar»)
+- Bandeja de entrada con procesado GTD en una sola pantalla (Hoy, Próxima acción, 2 minutos, Delegar, Algún día, Eliminar), chips de Proyecto y Contexto para asignarlos con un toque durante el procesado, y botón Procesar también en Hoy, Próximos, Calendario, Próximas acciones, En espera, Algún día, contextos, filtros, proyectos y Matriz (con «Saltar»)
 - Apertura instantánea: la app se dibuja desde la copia del dispositivo (service worker cache-first) y la sesión y los datos se actualizan en segundo plano
 - Hoy, Próximos, Calendario, Próximas acciones por contexto, En espera, Algún día / Quizás, Registro
 - Proyectos con secciones, vista de lista o tablero, objetivo, revisión periódica y proyectos compartidos con código
 - Secciones a mano dentro del proyecto: «Añadir sección» al final, tocar el nombre para renombrar y ⋯ para mover, añadir debajo o eliminar (con deshacer)
 - Proyectos privados: sus tareas se ven difuminadas en todas las vistas hasta pulsar el ojo; se vuelven a ocultar al cambiar de pantalla o salir de la app
-- Añadir rápido con la sintaxis de Todoist: `#proyecto`, `/sección`, `@contexto` o `%contexto`, `+persona`, `p1`–`p4`, `{fecha límite}`, fechas en lenguaje natural («mañana 10:00», «el viernes», «3/11», «en 5 días») y sugerencias mientras se escribe
+- Añadir rápido con chips de Proyecto y Contexto siempre visibles (un toque, sin escribir), además de la sintaxis de Todoist: `#proyecto`, `/sección`, `@contexto` o `%contexto`, `+persona`, `p1`–`p4`, `{fecha límite}`, fechas en lenguaje natural («mañana 10:00», «el viernes», «3/11», «en 5 días») y sugerencias mientras se escribe
 - Delegar al crear o editar una tarea: chip «Delegar» al crear, fila «Delegada a» en el detalle y `>persona` al escribir (`>Ana_López` para nombres con espacio). Se escribe el nombre o se elige uno de los recientes; la tarea pasa a En espera con la fecha de inicio. Teclas: `W` sobre la tarea seleccionada o abierta y `Alt + W` mientras se escribe
 - Atajos de teclado de Todoist sobre la tarea creada o seleccionada (`T`, `Shift+T`, `V`, `Y`, `1`–`4`, `L`, `Shift+R`, `W`, `E`, `Enter`) y de navegación (`Q`, `M`, `J/K`, `/`, `G` → `I/T/U/P`); `?` muestra la lista completa
 - Menú lateral que se puede fijar en PC (botón del menú o tecla `M`)
